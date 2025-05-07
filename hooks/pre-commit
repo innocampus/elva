@@ -1,0 +1,3 @@
+#!/bin/sh
+
+ruff check --fix "./src/elva"
