@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 
 
+## 0.35 - 2025-08-19
+
+### Fixed
+
+- Fix unhandled empty message values from parsing
+
+
+
 ## 0.34 - 2025-08-19
 
 ### Added
