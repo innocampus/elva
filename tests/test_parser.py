@@ -43,13 +43,13 @@ async def test_text_event_parser():
     holder.actions = list()
 
     class TestParser(TextEventParser):
-        async def on_retain(self, retain):
+        async def _on_retain(self, retain):
             holder.actions.append(("retain", retain))
 
-        async def on_insert(self, retain, value):
+        async def _on_insert(self, retain, value):
             holder.actions.append(("insert", retain, value))
 
-        async def on_delete(self, retain, length):
+        async def _on_delete(self, retain, length):
             holder.actions.append(("delete", retain, length))
 
     text_event_parser = TestParser()
@@ -113,13 +113,13 @@ async def test_array_event_parser():
     holder.actions = list()
 
     class TestParser(ArrayEventParser):
-        async def on_retain(self, retain):
+        async def _on_retain(self, retain):
             holder.actions.append(("retain", retain))
 
-        async def on_insert(self, retain, values):
+        async def _on_insert(self, retain, values):
             holder.actions.append(("insert", retain, values))
 
-        async def on_delete(self, retain, length):
+        async def _on_delete(self, retain, length):
             holder.actions.append(("delete", retain, length))
 
     array_event_parser = TestParser()
@@ -183,10 +183,10 @@ async def test_map_event_parser():
     holder.actions = set()
 
     class TestParser(MapEventParser):
-        async def on_add(self, key, new_value):
+        async def _on_add(self, key, new_value):
             holder.actions.add(("add", key, new_value))
 
-        async def on_delete(self, key, old_value):
+        async def _on_delete(self, key, old_value):
             holder.actions.add(("delete", key, old_value))
 
     map_event_parser = TestParser()

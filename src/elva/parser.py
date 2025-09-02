@@ -23,26 +23,21 @@ class EventParser(Component):
     event_type: TextEvent | ArrayEvent | MapEvent
     """Event type this parser is supposed to handle."""
 
-    @property
-    def states(self) -> ParserState:
-        """The states this component can have."""
-        return ParserState
-
     async def run(self):
         """
         Hook running after the `RUNNING` state has been set.
 
         It initializes the buffer and waits for incoming events to parse.
         """
-        self.send_stream, self.receive_stream = anyio.create_memory_object_stream(
+        self._send_stream, self._receive_stream = anyio.create_memory_object_stream(
             max_buffer_size=65543
         )
-        async with self.send_stream, self.receive_stream:
+        async with self._send_stream, self._receive_stream:
             self.log.info("awaiting events")
-            async for event in self.receive_stream:
-                await self.parse_event(event)
+            async for event in self._receive_stream:
+                await self._parse_event(event)
 
-    def check(self, event: TextEvent | ArrayEvent | MapEvent):
+    def _check(self, event: TextEvent | ArrayEvent | MapEvent):
         """
         Check for the correct `event` type.
 
@@ -64,8 +59,8 @@ class EventParser(Component):
         Arguments:
             event: object holding event information of changes to a Y data type.
         """
-        self.check(event)
-        await self.send_stream.send(event)
+        self._check(event)
+        await self._send_stream.send(event)
         self.log.debug("sending event")
 
     def parse_nowait(self, event: TextEvent | ArrayEvent | MapEvent):
@@ -75,10 +70,10 @@ class EventParser(Component):
         Arguments:
             event: object holding event information of changes to a Y data type.
         """
-        self.check(event)
-        self.send_stream.send_nowait(event)
+        self._check(event)
+        self._send_stream.send_nowait(event)
 
-    async def parse_event(self, event: TextEvent | ArrayEvent | MapEvent):
+    async def _parse_event(self, event: TextEvent | ArrayEvent | MapEvent):
         """
         Hook called when an `event` has been queued for parsing and which performs further actions.
 
@@ -98,7 +93,7 @@ class TextEventParser(EventParser):
     event_type = TextEvent
     """Event type this parser is supposed to handle."""
 
-    async def parse_event(self, event: TextEvent):
+    async def _parse_event(self, event: TextEvent):
         """
         Hook called when an `event` has been queued for parsing and which performs further actions.
 
@@ -112,15 +107,15 @@ class TextEventParser(EventParser):
             for action, var in delta.items():
                 if action == "retain":
                     range_offset = var
-                    await self.on_retain(range_offset)
+                    await self._on_retain(range_offset)
                 elif action == "insert":
                     insert_value = var
-                    await self.on_insert(range_offset, insert_value)
+                    await self._on_insert(range_offset, insert_value)
                 elif action == "delete":
                     range_length = var
-                    await self.on_delete(range_offset, range_length)
+                    await self._on_delete(range_offset, range_length)
 
-    async def on_retain(self, range_offset: int):
+    async def _on_retain(self, range_offset: int):
         """
         Hook called on action `retain`.
 
@@ -131,7 +126,7 @@ class TextEventParser(EventParser):
         """
         ...
 
-    async def on_insert(self, range_offset: int, insert_value: Any):
+    async def _on_insert(self, range_offset: int, insert_value: Any):
         """
         Hook called on action `insert`.
 
@@ -143,7 +138,7 @@ class TextEventParser(EventParser):
         """
         ...
 
-    async def on_delete(self, range_offset: int, range_length: int):
+    async def _on_delete(self, range_offset: int, range_length: int):
         """
         Hook called on action `delete`.
 
@@ -164,7 +159,7 @@ class ArrayEventParser(EventParser):
     event_type = ArrayEvent
     """Event type this parser is supposed to handle."""
 
-    async def parse_event(self, event: ArrayEvent):
+    async def _parse_event(self, event: ArrayEvent):
         """
         Hook called when an `event` has been queued for parsing and which performs further actions.
 
@@ -178,15 +173,15 @@ class ArrayEventParser(EventParser):
             for action, var in delta.items():
                 if action == "retain":
                     range_offset = var
-                    await self.on_retain(range_offset)
+                    await self._on_retain(range_offset)
                 elif action == "insert":
                     insert_value = var
-                    await self.on_insert(range_offset, insert_value)
+                    await self._on_insert(range_offset, insert_value)
                 elif action == "delete":
                     range_length = var
-                    await self.on_delete(range_offset, range_length)
+                    await self._on_delete(range_offset, range_length)
 
-    async def on_retain(self, range_offset: int):
+    async def _on_retain(self, range_offset: int):
         """
         Hook called on action `retain`.
 
@@ -197,7 +192,7 @@ class ArrayEventParser(EventParser):
         """
         ...
 
-    async def on_insert(self, range_offset: int, insert_value: Any):
+    async def _on_insert(self, range_offset: int, insert_value: Any):
         """
         Hook called on action `insert`.
 
@@ -209,7 +204,7 @@ class ArrayEventParser(EventParser):
         """
         ...
 
-    async def on_delete(self, range_offset: int, range_length: int):
+    async def _on_delete(self, range_offset: int, range_length: int):
         """
         Hook called on action `delete`.
 
@@ -230,7 +225,7 @@ class MapEventParser(EventParser):
     event_type = MapEvent
     """Event type this parser is supposed to handle."""
 
-    async def parse_event(self, event: MapEvent):
+    async def _parse_event(self, event: MapEvent):
         """
         Hook called when an `event` has been queued for parsing and which performs further actions.
 
@@ -244,12 +239,12 @@ class MapEventParser(EventParser):
             action = delta["action"]
             if action == "add":
                 new_value = delta["newValue"]
-                await self.on_add(key, new_value)
+                await self._on_add(key, new_value)
             elif action == "delete":
                 old_value = delta["oldValue"]
-                await self.on_delete(key, old_value)
+                await self._on_delete(key, old_value)
 
-    async def on_add(self, key: str, new_value: Any):
+    async def _on_add(self, key: str, new_value: Any):
         """
         Hook called on action `add`.
 
@@ -261,7 +256,7 @@ class MapEventParser(EventParser):
         """
         ...
 
-    async def on_delete(self, key: str, old_value: Any):
+    async def _on_delete(self, key: str, old_value: Any):
         """
         Hook called on action `delete`.
 
