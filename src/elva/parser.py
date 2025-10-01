@@ -4,228 +4,108 @@ Module defining parsers for change events from Y data types.
 
 from typing import Any
 
-import anyio
 from pycrdt import ArrayEvent, MapEvent, TextEvent
 
-from elva.component import Component, create_component_state
 
-ParserState = create_component_state("ParserState")
-"""The states of the [`EventParser`][elva.parser.EventParser] component."""
-
-
-class EventParser(Component):
+class IndexBasedEventParser:
     """
-    Parser base class.
-
-    This class is supposed to be inherited from and extended.
+    Base class for index-based [`TextEventParser][elva.parser.TextEventParser]
+    and [`ArrayEventParser`][elva.parser.ArrayEventParser].
     """
 
-    event_type: TextEvent | ArrayEvent | MapEvent
-    """Event type this parser is supposed to handle."""
-
-    async def run(self):
-        """
-        Hook running after the `RUNNING` state has been set.
-
-        It initializes the buffer and waits for incoming events to parse.
-        """
-        self._send_stream, self._receive_stream = anyio.create_memory_object_stream(
-            max_buffer_size=65543
-        )
-        async with self._send_stream, self._receive_stream:
-            self.log.info("awaiting events")
-            async for event in self._receive_stream:
-                await self._parse_event(event)
-
-    def _check(self, event: TextEvent | ArrayEvent | MapEvent):
-        """
-        Check for the correct `event` type.
-
-        Arguments:
-            event: object holding event information of changes to a Y data type.
-
-        Raises:
-            TypeError: if `event` is not an instance of [`event_type`][elva.parser.EventParser.event_type].
-        """
-        if not isinstance(event, self.event_type):
-            raise TypeError(
-                f"The event '{event}' is of type {type(event)}, but needs to be {self.event_type}"
-            )
-
-    async def parse(self, event: TextEvent | ArrayEvent | MapEvent):
-        """
-        Queue `event` for parsing asynchronously.
-
-        Arguments:
-            event: object holding event information of changes to a Y data type.
-        """
-        self._check(event)
-        await self._send_stream.send(event)
-        self.log.debug("sending event")
-
-    def parse_nowait(self, event: TextEvent | ArrayEvent | MapEvent):
-        """
-        Queue `event` for parsing synchronously.
-
-        Arguments:
-            event: object holding event information of changes to a Y data type.
-        """
-        self._check(event)
-        self._send_stream.send_nowait(event)
-
-    async def _parse_event(self, event: TextEvent | ArrayEvent | MapEvent):
-        """
-        Hook called when an `event` has been queued for parsing and which performs further actions.
-
-        This method is defined as a no-op and supposed to be implemented in the inheriting subclass.
-
-        Arguments:
-            event: object holding event information of changes to a Y data type.
-        """
-        ...
-
-
-class TextEventParser(EventParser):
-    """
-    [`TextEvent`][pycrdt.TextEvent] parser base class.
-    """
-
-    event_type = TextEvent
-    """Event type this parser is supposed to handle."""
-
-    async def _parse_event(self, event: TextEvent):
+    def parse(self, event: TextEvent | ArrayEvent):
         """
         Hook called when an `event` has been queued for parsing and which performs further actions.
 
         Arguments:
             event: object holding event information of changes to a Y text data type.
         """
-        deltas = event.delta
+        cursor = 0
+        kwargs = dict()
 
-        range_offset = 0
-        for delta in deltas:
-            for action, var in delta.items():
-                if action == "retain":
-                    range_offset = var
-                    await self._on_retain(range_offset)
-                elif action == "insert":
-                    insert_value = var
-                    await self._on_insert(range_offset, insert_value)
-                elif action == "delete":
-                    range_length = var
-                    await self._on_delete(range_offset, range_length)
+        # `event.delta` is a list of edits
+        for edit in event.delta:
+            if "retain" in edit:
+                # we are about to move the cursor to a new edit;
+                # perform the current edit first
+                if "insert" in kwargs or "delete" in kwargs:
+                    self._on_edit(**kwargs)
 
-    async def _on_retain(self, range_offset: int):
+                # renew kwargs for the new edit
+                kwargs = dict(retain=edit["retain"] + cursor)
+            else:
+                # update kwargs for the current edit
+                kwargs.update(edit)
+
+            # the type of inserted value depends on the event type
+            if type(event) is TextEvent:
+                len_insert = len(edit.get("insert", "").encode("utf-8"))
+            elif type(event) is ArrayEvent:
+                len_insert = len(edit.get("insert", []))
+
+            # move the cursor according to the edit actions
+            cursor += edit.get("retain", 0) + len_insert - edit.get("delete", 0)
+
+        # perform the last edit in `event.delta`
+        if "insert" in kwargs or "delete" in kwargs:
+            self._on_edit(**kwargs)
+
+    def _on_edit(**kwargs):
         """
-        Hook called on action `retain`.
+        Hook called on every edit of a parsed event.
 
-        This method is defined as a no-op and supposed to be implemented in the inheriting subclass.
+        It is defined as a no-op and supposed to be implemented in an inheriting subclass.
 
         Arguments:
-            range_offset: byte offset in the Y text data type.
-        """
-        ...
-
-    async def _on_insert(self, range_offset: int, insert_value: Any):
-        """
-        Hook called on action `insert`.
-
-        This method is defined as a no-op and supposed to be implemented in the inheriting subclass.
-
-        Arguments:
-            range_offset: byte offset in the Y text data type.
-            insert_value: value that was inserted at `range_offset`
-        """
-        ...
-
-    async def _on_delete(self, range_offset: int, range_length: int):
-        """
-        Hook called on action `delete`.
-
-        This method is defined as a no-op and supposed to be implemented in the inheriting subclass.
-
-        Arguments:
-            range_offset: byte offset in the Y text data type.
-            range_length: number of bytes deleted starting at `range_offset`
+            kwargs: a mapping of the edit parameters.
         """
         ...
 
 
-class ArrayEventParser(EventParser):
+class TextEventParser(IndexBasedEventParser):
+    """
+    [`TextEvent`][pycrdt.TextEvent] parser base class.
+    """
+
+    def _on_edit(retain: int = 0, delete: int = 0, insert: str = ""):
+        """
+        Hook called on every edit of a parsed event.
+
+        It is defined as a no-op and supposed to be implemented in an inheriting subclass.
+
+        Arguments:
+            retain: the UTF-8 byte index at which the insert and deletion range start.
+            delete: the length of the deletion range in UTF-8 bytes
+            insert: the inserted text.
+        """
+        ...
+
+
+class ArrayEventParser(IndexBasedEventParser):
     """
     [`ArrayEvent`][pycrdt.ArrayEvent] parser base class.
     """
 
-    event_type = ArrayEvent
-    """Event type this parser is supposed to handle."""
-
-    async def _parse_event(self, event: ArrayEvent):
+    def _on_edit(retain: int = 0, delete: int = 0, insert: list = []):
         """
-        Hook called when an `event` has been queued for parsing and which performs further actions.
+        Hook called on every edit of a parsed event.
+
+        It is defined as a no-op and supposed to be implemented in an inheriting subclass.
 
         Arguments:
-            event: object holding event information of changes to a Y array data type.
-        """
-        deltas = event.delta
-
-        range_offset = 0
-        for delta in deltas:
-            for action, var in delta.items():
-                if action == "retain":
-                    range_offset = var
-                    await self._on_retain(range_offset)
-                elif action == "insert":
-                    insert_value = var
-                    await self._on_insert(range_offset, insert_value)
-                elif action == "delete":
-                    range_length = var
-                    await self._on_delete(range_offset, range_length)
-
-    async def _on_retain(self, range_offset: int):
-        """
-        Hook called on action `retain`.
-
-        This method is defined as a no-op and supposed to be implemented in the inheriting subclass.
-
-        Arguments:
-            range_offset: byte offset in the Y array data type.
-        """
-        ...
-
-    async def _on_insert(self, range_offset: int, insert_value: Any):
-        """
-        Hook called on action `insert`.
-
-        This method is defined as a no-op and supposed to be implemented in the inheriting subclass.
-
-        Arguments:
-            range_offset: byte offset in the Y array data type.
-            insert_value: value that was inserted at `range_offset`
-        """
-        ...
-
-    async def _on_delete(self, range_offset: int, range_length: int):
-        """
-        Hook called on action `delete`.
-
-        This method is defined as a no-op and supposed to be implemented in the inheriting subclass.
-
-        Arguments:
-            range_offset: byte offset in the Y array data type.
-            range_length: number of items deleted starting at `range_offset`
+            retain: the index at which the insert and deletion range start.
+            delete: the length of the deletion range in indices
+            insert: a list of the inserted elements.
         """
         ...
 
 
-class MapEventParser(EventParser):
+class MapEventParser:
     """
     [`MapEvent`][pycrdt.MapEvent] parser base class.
     """
 
-    event_type = MapEvent
-    """Event type this parser is supposed to handle."""
-
-    async def _parse_event(self, event: MapEvent):
+    def parse(self, event: MapEvent):
         """
         Hook called when an `event` has been queued for parsing and which performs further actions.
 
@@ -234,36 +114,32 @@ class MapEventParser(EventParser):
         """
         keys = event.keys
 
+        insert = {}
+        update = {}
+        delete = {}
+
         for key, delta in keys.items():
-            print(delta)
             action = delta["action"]
             if action == "add":
-                new_value = delta["newValue"]
-                await self._on_add(key, new_value)
+                insert[key] = delta["newValue"]
+            elif action == "update":
+                update[key] = (delta["oldValue"], delta["newValue"])
             elif action == "delete":
-                old_value = delta["oldValue"]
-                await self._on_delete(key, old_value)
+                delete[key] = delta["oldValue"]
 
-    async def _on_add(self, key: str, new_value: Any):
+        self._on_edit(delete=delete, update=update, insert=insert)
+
+    def _on_edit(
+        self, delete: dict[str, Any], update: dict[str, Any], insert: dict[str, Any]
+    ):
         """
-        Hook called on action `add`.
+        Hook called on every edit of a parsed event.
 
-        This method is defined as a no-op and supposed to be implemented in the inheriting subclass.
+        It is defined as a no-op and supposed to be implemented in an inheriting subclass.
 
         Arguments:
-            key: key added to the Y map data type.
-            new_value: value associated with `key` in the Y map data type.
-        """
-        ...
-
-    async def _on_delete(self, key: str, old_value: Any):
-        """
-        Hook called on action `delete`.
-
-        This method is defined as a no-op and supposed to be implemented in the inheriting subclass.
-
-        Arguments:
-            key: key deleted from the Y map data type.
-            old_value: value which was associated with `key` in the Y map data type.
+            delete: a mapping with deleted keys alongside their respective old value.
+            update: a mapping with updated keys alongside tuples containing their respective old and new value.
+            insert: a mapping with added keys alongside their respective new value.
         """
         ...

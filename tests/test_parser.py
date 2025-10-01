@@ -1,8 +1,5 @@
-from typing import Union
-
-import anyio
 import pytest
-from pycrdt import Array, ArrayEvent, Doc, Map, MapEvent, Text, TextEvent
+from pycrdt import Array, Doc, Map, Text
 
 from elva.parser import (
     ArrayEventParser,
@@ -10,225 +7,346 @@ from elva.parser import (
     TextEventParser,
 )
 
-DELAY = 0.01  # seconds
 
+@pytest.mark.parametrize(
+    ("initial_text", "edits", "expected_text"),
+    (
+        # insert at beginning
+        (
+            "",
+            [lambda text: text.insert(0, "test")],
+            "test",
+        ),
+        # insert at end
+        (
+            "",
+            [lambda text: text.insert(100, "test")],
+            "test",
+        ),
+        # insert before content
+        (
+            "foo",
+            [lambda text: text.insert(0, "bar")],
+            "barfoo",
+        ),
+        # insert into content
+        (
+            "foo",
+            [lambda text: text.insert(1, "bar")],
+            "fbaroo",
+        ),
+        # insert after content
+        (
+            "foo",
+            [lambda text: text.insert(3, "bar")],
+            "foobar",
+        ),
+        # insert and delete slice
+        (
+            "foo",
+            [
+                lambda text: text.insert(2, "bar"),
+                lambda text: text.__delitem__(slice(1, 4)),
+                lambda text: text.insert(0, "baz"),
+            ],
+            "bazfro",
+        ),
+        # insert and delete slice
+        (
+            "foo",
+            [
+                lambda text: text.insert(3, "bar"),
+                lambda text: text.__delitem__(slice(2, 4)),
+                lambda text: text.insert(1, "quux"),
+            ],
+            "fquuxoar",
+        ),
+        # insert and delete slice
+        (
+            "foo",
+            [
+                lambda text: text.insert(1, "quux"),
+                lambda text: text.insert(7, "bar"),
+                lambda text: text.__delitem__(slice(6, 8)),
+            ],
+            "fquuxoar",
+        ),
+        # insert single grapheme cluster with a single codepoint
+        (
+            "",
+            [lambda text: text.insert(0, "\N{SLIGHTLY SMILING FACE}")],
+            "\N{SLIGHTLY SMILING FACE}",
+        ),
+        # insert single grapheme cluster with a single codepoint before content
+        (
+            "\N{PALM TREE}",
+            [lambda text: text.insert(0, "\N{SMILING FACE WITH SUNGLASSES}")],
+            "\N{SMILING FACE WITH SUNGLASSES}\N{PALM TREE}",
+        ),
+        # insert single grapheme cluster with a single codepoint into another cluster
+        (
+            "\N{PALM TREE}",
+            [lambda text: text.insert(2, "\N{SMILING FACE WITH SUNGLASSES}")],
+            "\N{PALM TREE}\N{SMILING FACE WITH SUNGLASSES}",
+        ),
+        # insert single grapheme cluster with a single codepoint after content
+        (
+            "\N{PALM TREE}",
+            [lambda text: text.insert(100, "\N{SMILING FACE WITH SUNGLASSES}")],
+            "\N{PALM TREE}\N{SMILING FACE WITH SUNGLASSES}",
+        ),
+    ),
+)
+def test_text_event_parser(initial_text, edits, expected_text):
+    #
+    # SETUP
+    #
 
-class Holder:
-    """An object to assign arbitrary attributes to."""
-
-    pass
-
-
-def init(data_type) -> tuple[Doc, Union[Text, Array, Map], Holder]:
-    """
-    Initializes a shared data type of kind 'kind' and integrates it into a YDocument.
-    It returns the YDocument, the shared data type and an holder object holding the last event.
-    """
-    doc = Doc()
-    doc["shared"] = data_type
-
-    holder = Holder()
-
-    def callback(event):
-        holder.event = event
-
-    data_type.observe(callback)
-
-    return doc, data_type, holder
-
-
-@pytest.mark.anyio
-async def test_text_event_parser():
-    doc, text, holder = init(Text())
-    holder.actions = list()
+    # parameters yielded from the parser class
+    params = list()
 
     class TestParser(TextEventParser):
-        async def _on_retain(self, retain):
-            holder.actions.append(("retain", retain))
+        def _on_edit(self, insert="", retain=0, delete=0):
+            params.append((insert, retain, delete))
 
-        async def _on_insert(self, retain, value):
-            holder.actions.append(("insert", retain, value))
+    parser = TestParser()
 
-        async def _on_delete(self, retain, length):
-            holder.actions.append(("delete", retain, length))
+    # data type
+    doc = Doc()
+    doc["shared"] = text = Text(initial_text)
+    text.observe(lambda event: parser.parse(event))
 
-    text_event_parser = TestParser()
-    sub = text_event_parser.subscribe()
-    states = text_event_parser.states
+    #
+    # TEST PARSER
+    #
 
-    async with text_event_parser:
-        # is it running?
-        while states.RUNNING not in text_event_parser.state:
-            await sub.receive()
+    # perform and pack the edits in atomic transaction
+    with doc.transaction():
+        for edit in edits:
+            edit(text)
 
+    # we defined the edits properly, so that we get the expected text
+    assert str(text) == expected_text
+
+    #
+    # TEST PARAMETERS
+    #
+
+    # define a new data type
+    new_doc = Doc()
+    new_doc["shared"] = new_text = Text(initial_text)
+
+    # define intended usage of parameters
+    def replace(text, insert, retain, delete):
+        if delete:
+            end = retain + delete
+            del text[retain:end]
+
+        if insert:
+            text.insert(retain, insert)
+
+    # redo the edits with the parameters
+    for edit in params:
+        replace(new_text, *edit)
+
+    # we end up with the same expected text as above
+    assert str(new_text) == expected_text
+
+
+@pytest.mark.parametrize(
+    ("initial_items", "edits", "expected_items"),
+    (
         # insert
-        text += "test"
-        assert str(text) == "test"
-        event = holder.event
-        assert isinstance(event, TextEvent)
+        (
+            [],
+            [lambda array: array.insert(0, "foo")],
+            ["foo"],
+        ),
+        # insert before another item
+        (
+            ["foo"],
+            [lambda array: array.insert(0, "bar")],
+            ["bar", "foo"],
+        ),
+        # insert after another item
+        (
+            ["foo"],
+            [lambda array: array.insert(1, "bar")],
+            ["foo", "bar"],
+        ),
+        # delete
+        (
+            ["foo"],
+            [lambda array: array.__delitem__(0)],
+            [],
+        ),
+        # insert and delete
+        (
+            [],
+            [
+                lambda array: array.insert(0, "bar"),
+                lambda array: array.insert(1, "baz"),
+                lambda array: array.__delitem__(0),
+            ],
+            ["baz"],
+        ),
+        # delete slice and insert
+        (
+            ["foo", "bar", "baz"],
+            [
+                lambda array: array.__delitem__(slice(0, 2)),
+                lambda array: array.insert(1, "quux"),
+                lambda array: array.__delitem__(0),
+            ],
+            ["quux"],
+        ),
+    ),
+)
+def test_array_event_parser(initial_items, edits, expected_items):
+    #
+    # SETUP
+    #
 
-        await text_event_parser.parse(event)
-        # wait for parsing to finish
-        await anyio.sleep(DELAY)
-        assert holder.actions == [
-            ("insert", 0, "test"),
-        ]
-
-        holder.actions.clear()
-
-        # retain and insert, order matters
-        text += "test"
-        assert str(text) == "testtest"
-        event = holder.event
-        assert isinstance(event, TextEvent)
-
-        await text_event_parser.parse(event)
-        # wait for parsing to finish
-        await anyio.sleep(DELAY)
-        assert holder.actions == [
-            ("retain", 4),
-            ("insert", 4, "test"),
-        ]
-
-        holder.actions.clear()
-
-        # retain and delete, order matters
-        del text[2:]
-        assert str(text) == "te"
-        event = holder.event
-        assert isinstance(event, TextEvent)
-
-        await text_event_parser.parse(event)
-        # wait for parsing to finish
-        await anyio.sleep(DELAY)
-        assert holder.actions == [
-            ("retain", 2),
-            ("delete", 2, 6),
-        ]
-
-
-@pytest.mark.anyio
-async def test_array_event_parser():
-    doc, array, holder = init(Array())
-    holder.actions = list()
+    # parameters yielded from the parser class
+    params = list()
 
     class TestParser(ArrayEventParser):
-        async def _on_retain(self, retain):
-            holder.actions.append(("retain", retain))
+        def _on_edit(self, insert=[], retain=0, delete=0):
+            params.append((insert, retain, delete))
 
-        async def _on_insert(self, retain, values):
-            holder.actions.append(("insert", retain, values))
+    parser = TestParser()
 
-        async def _on_delete(self, retain, length):
-            holder.actions.append(("delete", retain, length))
+    # data type
+    doc = Doc()
+    doc["shared"] = array = Array(initial_items)
+    array.observe(lambda event: parser.parse(event))
 
-    array_event_parser = TestParser()
-    sub = array_event_parser.subscribe()
-    states = array_event_parser.states
+    #
+    # TEST PARSER
+    #
 
-    async with array_event_parser:
-        # is it running?
-        while states.RUNNING not in array_event_parser.state:
-            await sub.receive()
+    # perform and pack the edits in atomic transaction
+    with doc.transaction():
+        for edit in edits:
+            edit(array)
 
-        # extend
-        array.extend([1, 2, 3])
-        assert array.to_py() == [1.0, 2.0, 3.0]
-        event = holder.event
-        assert isinstance(event, ArrayEvent)
+    # we defined the edits properly, so that we get the expected items
+    assert array.to_py() == expected_items
 
-        await array_event_parser.parse(event)
-        # wait for parsing to finish
-        await anyio.sleep(DELAY)
-        assert holder.actions == [
-            ("insert", 0, [1.0, 2.0, 3.0]),
-        ]
+    #
+    # TEST PARAMETERS
+    #
 
-        holder.actions.clear()
+    # define a new data type
+    new_doc = Doc()
+    new_doc["shared"] = new_array = Array(initial_items)
 
-        # retain and insert, order matters
-        array.insert(2, 10)
-        assert array.to_py() == [1.0, 2.0, 10.0, 3.0]
-        event = holder.event
-        assert isinstance(event, ArrayEvent)
+    # define intended usage of parameters
+    def replace(array, insert, retain, delete):
+        if delete:
+            end = retain + delete
+            del array[retain:end]
 
-        await array_event_parser.parse(event)
-        # wait for parsing to finish
-        await anyio.sleep(DELAY)
-        assert holder.actions == [
-            ("retain", 2),
-            ("insert", 2, [10.0]),
-        ]
+        for i, item in enumerate(insert):
+            array.insert(retain + i, item)
 
-        holder.actions.clear()
+    # redo the edits with the parameters
+    for edit in params:
+        replace(new_array, *edit)
 
-        # retain and delete, order matters
-        array.pop(1)
-        assert array.to_py() == [1.0, 10.0, 3.0]
-        event = holder.event
-        assert isinstance(event, ArrayEvent)
-
-        await array_event_parser.parse(event)
-        # wait for parsing to finish
-        await anyio.sleep(DELAY)
-        assert holder.actions == [
-            ("retain", 1),
-            ("delete", 1, 1),
-        ]
+    # we end up with the same expected items as above
+    assert new_array.to_py() == expected_items
 
 
-@pytest.mark.anyio
-async def test_map_event_parser():
-    doc, map, holder = init(Map())
-    holder.actions = set()
+@pytest.mark.parametrize(
+    ("initial_items", "edits", "expected_items"),
+    (
+        # insert
+        (
+            {},
+            [lambda map: map.__setitem__("foo", "bar")],
+            {"foo": "bar"},
+        ),
+        # delete
+        (
+            {"foo": "bar"},
+            [lambda map: map.__delitem__("foo")],
+            {},
+        ),
+        # update
+        (
+            {"foo": "bar"},
+            [lambda map: map.__setitem__("foo", "baz")],
+            {"foo": "baz"},
+        ),
+        # insert, delete, update
+        (
+            {},
+            [
+                lambda map: map.__setitem__("foo", "bar"),
+                lambda map: map.__setitem__("baz", "quux"),
+                lambda map: map.__delitem__("baz"),
+                lambda map: map.__setitem__("foo", "blub"),
+            ],
+            {"foo": "blub"},
+        ),
+    ),
+)
+def test_map_event_parser(initial_items, edits, expected_items):
+    #
+    # SETUP
+    #
+
+    # parameters yielded from the parser class
+    params = list()
 
     class TestParser(MapEventParser):
-        async def _on_add(self, key, new_value):
-            holder.actions.add(("add", key, new_value))
+        def _on_edit(self, delete={}, update={}, insert={}):
+            params.append((delete, update, insert))
 
-        async def _on_delete(self, key, old_value):
-            holder.actions.add(("delete", key, old_value))
+    parser = TestParser()
 
-    map_event_parser = TestParser()
-    sub = map_event_parser.subscribe()
-    states = map_event_parser.states
+    # data type
+    doc = Doc()
+    doc["shared"] = map = Map(initial_items)
+    map.observe(lambda event: parser.parse(event))
 
-    async with map_event_parser:
-        # is it running?
-        while states.RUNNING not in map_event_parser.state:
-            await sub.receive()
+    #
+    # TEST PARSER
+    #
 
-        # add
-        # order does not matter
-        map.update({"foo": "bar", "baz": "faz"})
-        assert map.to_py() == {"foo": "bar", "baz": "faz"}
-        event = holder.event
-        assert isinstance(event, MapEvent)
+    # perform and pack the edits in atomic transaction
+    with doc.transaction():
+        for edit in edits:
+            edit(map)
 
-        await map_event_parser.parse(event)
-        # wait for parsing to finish
-        await anyio.sleep(DELAY)
-        assert holder.actions == set(
-            [
-                ("add", "foo", "bar"),
-                ("add", "baz", "faz"),
-            ]
-        )
+    # we defined the edits properly, so that we get the expected items
+    assert map.to_py() == expected_items
 
-        holder.actions.clear()
+    #
+    # TEST PARAMETERS
+    #
 
-        # delete
-        # order does not matter
-        map.pop("foo")
-        assert map.to_py() == {"baz": "faz"}
-        event = holder.event
-        assert isinstance(event, MapEvent)
+    # define a new data type
+    new_doc = Doc()
+    new_doc["shared"] = new_map = Map(initial_items)
 
-        await map_event_parser.parse(event)
-        # wait for parsing to finish
-        await anyio.sleep(DELAY)
-        assert holder.actions == set(
-            [
-                ("delete", "foo", "bar"),
-            ]
-        )
+    # define intended usage of parameters
+    def replace(map, delete, update, insert):
+        # delete all keys
+        for key in delete:
+            del map[key]
+
+        # extract only the new values of updated keys
+        update = dict((key, new) for key, (_, new) in update.items())
+        map.update(update)
+
+        # throw in new key-value-pairs
+        map.update(insert)
+
+    # redo the edits with the parameters
+    for edit in params:
+        replace(new_map, *edit)
+
+    # we end up with the same expected items as above
+    assert new_map.to_py() == expected_items
