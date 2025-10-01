@@ -4,16 +4,18 @@ Widget definition.
 
 from typing import Self
 
-from pycrdt import Text, TextEvent, UndoManager
+from pycrdt import Text, UndoManager
 from textual._tree_sitter import TREE_SITTER, get_language
 from textual.events import MouseDown
 from textual.widgets import TextArea
+
+from elva.parser import TextEventParser
 
 from .location import update_location
 from .selection import Selection
 
 
-class YTextArea(TextArea):
+class YTextArea(TextArea, TextEventParser):
     """
     Widget for displaying and manipulating text synchronized in realtime.
     """
@@ -126,33 +128,20 @@ class YTextArea(TextArea):
         index = self.document.get_index_from_location(location)
         return self.get_binary_index_from_index(index)
 
-    def on_textevent(self, event: TextEvent):
+    def _on_edit(self, retain: int = 0, delete: int = 0, insert: str = ""):
         """
-        Hook called on changes in the Y text data type:
-
-        It parses the event and applies the edit to the document.
+        Hook called from the [`parse`][elva.parser.TextEventParser] method.
 
         Arguments:
-            event: an object holding edit information.
+            retain: the cursor to position at which the deletio and insertion range starts.
+            delete: the length of the deletion range.
+            insert: the insert text.
         """
-        istart = 0
-        length = 0
-        insert = ""
+        # convert from binary index to document locations
+        start = self.get_location_from_binary_index(retain)
+        end = self.get_location_from_binary_index(retain + delete)
 
-        for delta in event.delta:
-            for action, var in delta.items():
-                if action == "retain":
-                    istart = var
-                elif action == "delete":
-                    length = var
-                elif action == "insert":
-                    insert = var
-
-        iend = istart + length
-
-        start = self.get_location_from_binary_index(istart)
-        end = self.get_location_from_binary_index(iend)
-
+        # apply the update to the UI
         self._apply_update(insert, start, end)
 
     def on_mount(self):
@@ -161,7 +150,7 @@ class YTextArea(TextArea):
 
         It adds a subscription to changes in the Y text data type.
         """
-        self.subscription_textevent = self.ytext.observe(self.on_textevent)
+        self.subscription_textevent = self.ytext.observe(self.parse)
 
     def on_unmount(self):
         """
