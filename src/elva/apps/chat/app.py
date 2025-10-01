@@ -563,7 +563,7 @@ class UI(App):
         for client_id in removed:
             if str(client_id) != self.client_id:
                 try:
-                    self.future.pop(str(client_id))
+                    del self.future[str(client_id)]
                 except KeyError:
                     pass
 
