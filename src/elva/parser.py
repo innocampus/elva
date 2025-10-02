@@ -13,6 +13,21 @@ class IndexBasedEventParser:
     and [`ArrayEventParser`][elva.parser.ArrayEventParser].
     """
 
+    def _get_insertion_length(self, value: str | list) -> int:
+        """
+        Calculate the cursor advancement for the inserted value.
+
+        Raises:
+            NotImplementedError: if not redefined.
+
+        Arguments:
+            value: the inserted value.
+
+        Returns:
+            the steps to move the cursor forward.
+        """
+        raise NotImplementedError("No insertion length logic specified")
+
     def parse(self, event: TextEvent | ArrayEvent):
         """
         Hook called when an `event` has been queued for parsing and which performs further actions.
@@ -37,16 +52,12 @@ class IndexBasedEventParser:
                 # update kwargs for the current edit
                 kwargs.update(edit)
 
-            # the type of inserted value depends on the event type
-            if type(event) is TextEvent:
-                len_insert = len(edit.get("insert", "").encode("utf-8"))
-            elif type(event) is ArrayEvent:
-                len_insert = len(edit.get("insert", []))
-
             # move the cursor according to the edit actions
             cursor += edit.get("retain", 0)
             if "insert" in edit:
-                cursor += len_insert - edit.get("delete", 0)
+                cursor += self._get_insertion_length(edit["insert"]) - edit.get(
+                    "delete", 0
+                )
 
         # perform the last edit in `event.delta`
         if "insert" in kwargs or "delete" in kwargs:
@@ -69,6 +80,18 @@ class TextEventParser(IndexBasedEventParser):
     [`TextEvent`][pycrdt.TextEvent] parser base class.
     """
 
+    def _get_insertion_length(self, text: str) -> int:
+        """
+        Calculate the cursor advancement for the inserted text.
+
+        Arguments:
+            value: the inserted text.
+
+        Returns:
+            the steps to move the cursor forward.
+        """
+        return len(text.encode("utf-8"))
+
     def _on_edit(retain: int = 0, delete: int = 0, insert: str = ""):
         """
         Hook called on every edit of a parsed event.
@@ -87,6 +110,18 @@ class ArrayEventParser(IndexBasedEventParser):
     """
     [`ArrayEvent`][pycrdt.ArrayEvent] parser base class.
     """
+
+    def _get_insertion_length(self, items: list) -> int:
+        """
+        Calculate the cursor advancement for the inserted items.
+
+        Arguments:
+            value: the inserted items.
+
+        Returns:
+            the steps to move the cursor forward.
+        """
+        return len(items)
 
     def _on_edit(retain: int = 0, delete: int = 0, insert: list = []):
         """
