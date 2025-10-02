@@ -12,10 +12,10 @@
 
 This is the source code repository of ELVA, a suite of apps enabling real-time collaboration locally, with CRDTs at its heart ❤️.
 
-- If you want to get started using ELVA, head over to our [user guide](https://elva.mintgruen.tu-berlin.de/developer-guide/user-guide.md).
-- You want to run a server? Check out the [server guide](https://elva.mintgruen.tu-berlin.de/developer-guide/server-guide.md).
-- To realize your own app, have a look the our [app guide](https://elva.mintgruen.tu-berlin.de/developer-guide/app-guide.md).
-- Looking for how to contribute? We have some notes for you in our [developer guide](https://elva.mintgruen.tu-berlin.de/developer-guide/developer-guide.md).
+- If you want to get started using ELVA, head over to our [user guide](https://elva.mintgruen.tu-berlin.de/user-guide/).
+- You want to run a server? Check out the [server guide](https://elva.mintgruen.tu-berlin.de/server-guide/).
+- To realize your own app, have a look the our [app guide](https://elva.mintgruen.tu-berlin.de/app-guide/).
+- Looking for how to contribute? We have some notes for you in our [developer guide](https://elva.mintgruen.tu-berlin.de/developer-guide/).
 
 ## Licensing
 
