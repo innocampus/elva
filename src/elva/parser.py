@@ -54,7 +54,7 @@ class IndexBasedEventParser:
             elif "insert" in edit:
                 # the cursor only moves on insertion respecting a present deletion,
                 # but not on deletion only
-                cursor += self._get_insertion_length(edit["insert"]) - edit.get(
+                cursor += self._get_insertion_length(edit["insert"]) - kwargs.get(
                     "delete", 0
                 )
 
