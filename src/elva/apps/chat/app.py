@@ -10,11 +10,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 import emoji
-from pycrdt import Array, ArrayEvent, Doc, Map, MapEvent, Text, TextEvent
+from pycrdt import Array, Doc, Map, Text, TextEvent
 from rich.markdown import Markdown as RichMarkdown
 from textual.app import App
 from textual.containers import VerticalScroll
-from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Rule, Static, TabbedContent, TabPane
@@ -140,7 +139,7 @@ class MessageList(VerticalScroll):
         return message_view
 
 
-class History(MessageList, can_focus=False):
+class History(MessageList, ArrayEventParser, can_focus=False):
     """
     List of already sent messages.
     """
@@ -153,84 +152,38 @@ class History(MessageList, can_focus=False):
             message_view = self.get_message_view(message)
             yield message_view
 
-
-class HistoryParser(ArrayEventParser):
-    """
-    Parser for changes in the message history.
-
-    This class reflects the state of the Y array with history message in the [`History`][elva.apps.chat.app.History] message list on changes.
-    """
-
-    def __init__(self, history: Array, widget: History):
+    def on_mount(self):
         """
-        Arguments:
-            history: Y array containing already sent messages.
+        Hook subscribing to history changes on mount.
         """
-        self.history = history
-        self.widget = widget
+        self._subscription = self.messages.observe(self.parse)
 
-    def history_callback(self, event: ArrayEvent):
+    def on_unmount(self):
         """
-        Hook called on a change in the Y array message history.
+        Hook unsubscribing from history changes on unmount.
+        """
+        self.messages.unobserve(self._subscription)
 
-        This method parses the event and calls the defined action hooks accordingly.
+    def _on_edit(self, retain: int = 0, delete: int = 0, insert: list = []):
+        """
+        Hook called by the [`parse`][elva.parser.ArrayEventParser.parse] method.
 
         Arguments:
-            event: an object holding information about the change in the Y array.
+            retain: the index where the deletion and insertion ranges start.
+            delete: the length of the deletion range.
+            insert: the inserted items.
         """
-        self.parse_nowait(event)
-        self.log.debug("history callback triggered")
-
-    async def before(self):
-        """
-        Hook called before the component sets the `RUNNING` state.
-
-        This method subscribes to changes in the Y array message history.
-        """
-        self.subscription = self.history.observe(self.history_callback)
-        self.log.debug("subscribed to changes in history")
-
-    async def on_insert(self, range_offset: int, insert_value: str):
-        """
-        Hook called on an insert action in a Y array change event.
-
-        This methods creates a new message view and mounts it to the message history.
-
-        Arguments:
-            range_offset: the start index of the insert.
-            insert_value: the inserted content.
-        """
-        for message in insert_value:
-            message_view = self.widget.get_message_view(message)
-            log.debug("mounting message view in history")
-            await self.widget.mount(message_view, after=range_offset - 1)
-
-    async def cleanup(self):
-        """
-        Hook called after cancellation and before the component unsets its state to `NONE`.
-        """
-        if hasattr(self, "subscription"):
-            self.history.unobserve(self.subscription)
-            del self.subscription
-
-    async def on_delete(self, range_offset: int, range_length: str):
-        """
-        Hook called on a delete action in a Y array change event.
-
-        This method removes the all message views in the given index range.
-
-        Arguments:
-            range_offset: the start index of the deletion.
-            range_length: the number of subsequent indices.
-        """
-        for message_view in self.widget.children[
-            range_offset : range_offset + range_length
-        ]:
+        for message_view in self.children[retain : retain + delete]:
             log.debug("deleting message view in history")
-            await message_view.remove()
+            message_view.remove()
+
+        for message in insert:
+            message_view = self.get_message_view(message)
+            log.debug("mounting message view in history")
+            self.mount(message_view, after=retain - 1)
 
 
-class Future(MessageList, can_focus=False):
+class Future(MessageList, MapEventParser, can_focus=False):
     """
     List of currently composed messages.
     """
@@ -261,97 +214,46 @@ class Future(MessageList, can_focus=False):
                 )
                 yield message_view
 
-
-class FutureParser(MapEventParser):
-    """
-    Parser for changes in currently composed messages.
-
-    This class reflects the state of the Y map with currently composed messaged in the [`Future`][elva.apps.chat.app.Future] message list on changes.
-    """
-
-    def __init__(self, future: Map, widget: Future, user: str, show_self: bool):
+    def on_mount(self):
         """
-        Arguments:
-            future: Y map mapping message identifiers to their corresponding message objects.
-            widget: the message list widget displaying the currently composed messages.
-            user: the current username.
-            show_self: flag whether to show the own currently composed message.
+        Hook subscribing to history changes on mount.
         """
-        self.future = future
-        self.widget = widget
-        self.user = user
-        self.show_self = show_self
+        self._subscription = self.messages.observe(self.parse)
 
-    def future_callback(self, event: MapEvent):
+    def on_unmount(self):
         """
-        Hook called on changes in the Y map.
+        Hook unsubscribing from history changes on unmount.
+        """
+        self.messages.unobserve(self._subscription)
 
-        This method parses the event object and calls action hooks accordingly.
+    def _on_edit(self, delete: dict = {}, update: dict = {}, insert: dict = {}):
+        """
+        Hook called by the [`parse`][elva.parser.MapEventParser.parse] method.
 
         Arguments:
-            event: an object holding information about the change in the Y map.
+            delete: the deleted keys alongside their respective old values.
+            update: the updated keys alongside their respective old and new values.
+            insert: the inserted keys alongside their respective new values.
         """
-        self.parse_nowait(event)
-        log.debug("future callback triggered")
-
-    async def before(self):
-        """
-        Hook called before the component sets the `RUNNING` signal.
-
-        This method subscribes to changes in the mapping of currently composed messages.
-        """
-        self.subscription = self.future.observe(self.future_callback)
-        self.log.debug("subscribed to changes in future")
-
-    async def cleanup(self):
-        """
-        Hook called after cancellation and before the component unsets its state to `NONE`.
-        """
-        if hasattr(self, "subscription"):
-            self.future.unobserve(self.subscription)
-            del self.subscription
-
-    async def on_add(self, key: str, new_value: dict):
-        """
-        Hook called on an add action.
-
-        This methods generates a message view from the added message object and mounts it to the list of currently composed messages.
-
-        Arguments:
-            key: the message id that has been added.
-            new_value: the message object that has been added.
-        """
-        # TODO: fix the origin of empty values
-        if not new_value:
-            return
-
-        if not self.show_self and new_value["author"] == self.user:
-            return
-
-        message_view = self.widget.get_message_view(new_value, message_id="id" + key)
-        log.debug("mounting message view in future")
-        self.widget.mount(message_view)
-
-    async def on_delete(self, key: str, old_value: dict):
-        """
-        Hook called on a delete action.
-
-        This methods removes the message view corresponding to the removed message id.
-
-        Arguments:
-            key: the message id that has been deleted.
-            old_value: the message object that has been deleted.
-        """
-        # TODO: fix the origin of empty values
-        if not old_value:
-            return
-
-        try:
-            message = self.widget.query_one("#id" + key)
+        # remove old message objects
+        for key in delete:
+            message = self.query_one("#id" + key)
             log.debug("deleting message view in future")
             message.remove()
-        except NoMatches:
-            pass
+
+        # we assume they are no message objects to be updated under the same identifier;
+        # either they are deleted, inserted or the YText *within* the message object is changed
+
+        # insert new message objects
+        for key, value in insert.items():
+            if not self.show_self and value["author"] == self.user:
+                # this future message is from the current user,
+                # which does not want to see the own typing twice
+                pass
+            else:
+                message_view = self.get_message_view(value, message_id="id" + key)
+                log.debug("mounting message view in future")
+                self.mount(message_view)
 
 
 class MessagePreview(Static):
@@ -424,29 +326,12 @@ class UI(App):
         self.client_id = str(self.ydoc.client_id)
         self.user = c.get("user", self.client_id)
         self.display_name = c.get("name")
-        self.show_self = show_self = c.get("show_self", True)
+        self.show_self = c.get("show_self", True)
 
         self.message, self.ytext, message_id = self.get_message("")
 
-        # widgets
-        self.history_widget = History(self.history, self.user, id="history")
-        self.future_widget = Future(
-            self.future, self.user, show_self=show_self, id="future"
-        )
-
         # components
-        self.history_parser = HistoryParser(self.history, self.history_widget)
-        self.future_parser = FutureParser(
-            self.future,
-            self.future_widget,
-            self.user,
-            show_self,
-        )
-
-        self.components = [
-            self.history_parser,
-            self.future_parser,
-        ]
+        self.components = []
 
         if c.get("file") is not None:
             self.store = SQLiteStore(
@@ -573,9 +458,9 @@ class UI(App):
         """
         Hook arranging child widgets.
         """
-        yield self.history_widget
+        yield History(self.history, self.user, id="history")
         yield Rule(line_style="heavy")
-        yield self.future_widget
+        yield Future(self.future, self.user, show_self=self.show_self, id="future")
         yield TabbedContent(id="tabview")
 
     def on_unmount(self):
@@ -678,7 +563,7 @@ class UI(App):
         for client_id in removed:
             if str(client_id) != self.client_id:
                 try:
-                    self.future.pop(str(client_id))
+                    del self.future[str(client_id)]
                 except KeyError:
                     pass
 
