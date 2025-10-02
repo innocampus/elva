@@ -17,6 +17,8 @@ class IndexBasedEventParser:
         """
         Calculate the cursor advancement for the inserted value.
 
+        This method is supposed to be implemented in an inheriting subclass.
+
         Raises:
             NotImplementedError: if not redefined.
 
