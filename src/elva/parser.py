@@ -154,14 +154,17 @@ class MapEventParser:
         Arguments:
             event: object holding event information of changes to a Y map data type.
         """
+        # dictionary of keys mapping to actions and values
         keys = event.keys
 
-        insert = {}
-        update = {}
-        delete = {}
+        insert = dict()
+        update = dict()
+        delete = dict()
 
+        # collect inserted, updated and deleted keys alongside their values
         for key, delta in keys.items():
             action = delta["action"]
+
             if action == "add":
                 insert[key] = delta["newValue"]
             elif action == "update":
@@ -169,6 +172,7 @@ class MapEventParser:
             elif action == "delete":
                 delete[key] = delta["oldValue"]
 
+        # perform the edit
         self._on_edit(delete=delete, update=update, insert=insert)
 
     def _on_edit(
