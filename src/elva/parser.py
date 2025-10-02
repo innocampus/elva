@@ -43,24 +43,29 @@ class IndexBasedEventParser:
             if "retain" in edit:
                 # we are about to move the cursor to a new edit;
                 # perform the current edit first
-                if "insert" in kwargs or "delete" in kwargs:
+                if kwargs:
                     self._on_edit(**kwargs)
 
-                # renew kwargs for the new edit
-                kwargs = dict(retain=edit["retain"] + cursor)
-            else:
-                # update kwargs for the current edit
-                kwargs.update(edit)
+                # move the cursor
+                cursor += edit["retain"]
 
-            # move the cursor according to the edit actions
-            cursor += edit.get("retain", 0)
-            if "insert" in edit:
+                # renew kwargs for the new edit
+                kwargs = dict(retain=cursor)
+            elif "insert" in edit:
+                # the cursor only moves on insertion respecting a present deletion,
+                # but not on deletion only
                 cursor += self._get_insertion_length(edit["insert"]) - edit.get(
                     "delete", 0
                 )
 
+                # update kwargs for the current edit
+                kwargs.update(edit)
+            else:
+                # "delete" in edit
+                kwargs.update(edit)
+
         # perform the last edit in `event.delta`
-        if "insert" in kwargs or "delete" in kwargs:
+        if kwargs:
             self._on_edit(**kwargs)
 
     def _on_edit(**kwargs):
