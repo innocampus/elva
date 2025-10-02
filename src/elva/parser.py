@@ -44,7 +44,9 @@ class IndexBasedEventParser:
                 len_insert = len(edit.get("insert", []))
 
             # move the cursor according to the edit actions
-            cursor += edit.get("retain", 0) + len_insert - edit.get("delete", 0)
+            cursor += edit.get("retain", 0)
+            if "insert" in edit:
+                cursor += len_insert - edit.get("delete", 0)
 
         # perform the last edit in `event.delta`
         if "insert" in kwargs or "delete" in kwargs:

@@ -71,6 +71,15 @@ from elva.parser import (
             ],
             "fquuxoar",
         ),
+        # delete separate ranges
+        (
+            "foobarbaz",
+            [
+                lambda text: text.__delitem__(slice(0, 3)),
+                lambda text: text.__delitem__(slice(3, 6)),
+            ],
+            "bar",
+        ),
         # insert single grapheme cluster with a single codepoint
         (
             "",
@@ -199,6 +208,15 @@ def test_text_event_parser(initial_text, edits, expected_text):
                 lambda array: array.__delitem__(0),
             ],
             ["quux"],
+        ),
+        # delete separate ranges
+        (
+            ["foo", "bar", "baz", "quux", "blub"],
+            [
+                lambda array: array.__delitem__(slice(0, 2)),
+                lambda array: array.__delitem__(slice(1, 3)),
+            ],
+            ["baz"],
         ),
     ),
 )
