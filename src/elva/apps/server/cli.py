@@ -2,12 +2,16 @@
 CLI definition.
 """
 
+import ssl
 from importlib import import_module as import_
 from pathlib import Path
 
 import click
 
 from elva.cli import common_options, pass_config_for
+
+LOCAL_HOSTS = frozenset(["localhost", "127.0.0.1", "::1"])
+"""Hostnames considered local and allowed to serve without TLS."""
 
 APP_NAME = "server"
 """The name of the app."""
@@ -87,6 +91,18 @@ def resolve_persistence(
     help="Enable Dummy Basic Authentication. DO NOT USE IN PRODUCTION.",
     is_flag=True,
 )
+@click.option(
+    "--ssl-cert",
+    "ssl_cert",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to SSL certificate file. Required for non-localhost hosts.",
+)
+@click.option(
+    "--ssl-key",
+    "ssl_key",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to SSL private key file. Required for non-localhost hosts.",
+)
 @pass_config_for(APP_NAME)
 def cli(config: dict, *args: tuple, **kwargs: dict):
     """
@@ -121,6 +137,29 @@ def cli(config: dict, *args: tuple, **kwargs: dict):
     level_name = config.get("level") or "INFO"
     level = logging.getLevelNamesMapping()[level_name]
     log.setLevel(level)
+
+    # validate SSL requirements for non-local hosts
+    host = config.get("host", "0.0.0.0")
+    ssl_cert = config.get("ssl_cert")
+    ssl_key = config.get("ssl_key")
+
+    if host not in LOCAL_HOSTS:
+        if ssl_cert is None or ssl_key is None:
+            raise click.UsageError(
+                f"SSL certificate and key are required for non-local host '{host}'. "
+                f"Use --ssl-cert and --ssl-key options, or bind to localhost."
+            )
+
+    # create SSL context if certificates are provided
+    if ssl_cert is not None and ssl_key is not None:
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_context.load_cert_chain(ssl_cert, ssl_key)
+        config["ssl_context"] = ssl_context
+        log.info(f"TLS enabled with certificate {ssl_cert}")
+    elif ssl_cert is not None or ssl_key is not None:
+        raise click.UsageError(
+            "Both --ssl-cert and --ssl-key must be provided together."
+        )
 
     # run app, catch file permission errors with an appropriate message
     try:

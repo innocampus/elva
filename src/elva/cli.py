@@ -599,8 +599,8 @@ port_option = click.option(
 safe_option = click.option(
     "--safe/--unsafe",
     "safe",
-    help="Enable or disable secure connection.",
-    default=True,
+    help="Enable or disable secure connection. If not specified, auto-detect by probing for TLS.",
+    default=None,
 )
 """A CLI command decorator defining a flag for safe or unsafe connections."""
 

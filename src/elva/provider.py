@@ -3,6 +3,8 @@ Module holding provider components.
 """
 
 import logging
+import socket
+import ssl
 from inspect import Signature, isawaitable, signature
 from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import urlunparse
@@ -15,6 +17,29 @@ from websockets.exceptions import ConnectionClosed, WebSocketException
 from elva.awareness import Awareness
 from elva.component import Component, create_component_state
 from elva.protocol import YMessage
+
+
+def probe_tls(host: str, port: int, timeout: float = 2.0) -> bool:
+    """
+    Probe a host:port to check if it speaks TLS.
+
+    Arguments:
+        host: the hostname or IP address to probe.
+        port: the port number to probe.
+        timeout: connection timeout in seconds.
+
+    Returns:
+        `True` if the server speaks TLS, `False` otherwise.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            with context.wrap_socket(sock, server_hostname=host):
+                return True
+    except (ssl.SSLError, ConnectionResetError, OSError):
+        return False
 
 WebsocketProviderState = create_component_state(
     "WebsocketProviderState", ("CONNECTED",)
@@ -63,7 +88,7 @@ class WebsocketProvider(Component):
         host: str,
         *args: tuple[Any],
         port: int = None,
-        safe: bool = True,
+        safe: bool | None = None,
         on_exception: Awaitable | None = None,
         **kwargs: dict[Any],
     ):
@@ -73,7 +98,7 @@ class WebsocketProvider(Component):
             identifier: identifier of the synchronized Y Document.
             host: hostname or IP address of the Y Document synchronizing websocket server.
             port: port of the Y Document synchronizing websocket server.
-            safe: flag whether to establish a secured (`True`) or unsecured (`False`) connection.
+            safe: flag whether to establish a secured (`True`) or unsecured (`False`) connection. If `None`, auto-detect by probing the server for TLS support.
             on_exception: callback to which the current connection exception and a reference to the connection option mapping is given.
             *args: positional arguments passed to [`connect`][websockets.asyncio.client.connect].
             **kwargs: keyword arguments passed to [`connect`][websockets.asyncio.client.connect].
@@ -82,7 +107,12 @@ class WebsocketProvider(Component):
         self.awareness = Awareness(ydoc)
         self.awareness.log = logging.getLogger(f"{self.log.name}.Awareness")
 
-        # construct URI
+        # determine scheme: explicit safe/unsafe or auto-detect via TLS probe
+        if safe is None:
+            probe_port = port if port is not None else 443
+            safe = probe_tls(host, probe_port)
+            self.log.debug(f"TLS probe: {'available' if safe else 'not available'}")
+
         scheme = "wss" if safe else "ws"
         netloc = f"{host}:{port}" if port is not None else host
 

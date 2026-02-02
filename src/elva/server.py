@@ -353,6 +353,9 @@ class WebsocketServer(Component):
     rooms: dict[str, Room]
     """mapping of connection handlers to their corresponding identifiers."""
 
+    ssl_context: "ssl.SSLContext | None"
+    """optional SSL context for TLS connections."""
+
     def __init__(
         self,
         host: str,
@@ -360,6 +363,7 @@ class WebsocketServer(Component):
         persistent: bool = False,
         path: None | Path = None,
         process_request: None | Callable = None,
+        ssl_context: "ssl.SSLContext | None" = None,
     ):
         """
         Arguments:
@@ -368,11 +372,13 @@ class WebsocketServer(Component):
             persistent: flag whether to save Y Document updates persistently.
             path: path where to store Y Document contents on disk.
             process_request: callable checking the HTTP request headers on new connections.
+            ssl_context: optional SSL context for TLS connections.
         """
         self.host = host
         self.port = port
         self.persistent = persistent
         self.path = path
+        self.ssl_context = ssl_context
 
         if path is not None:
             # check whether `path` is writable, OS-agnostic
@@ -414,6 +420,7 @@ class WebsocketServer(Component):
             self.port,
             process_request=self.process_request,
             logger=logging.getLogger(f"{self.log.name}.ServerConnection"),
+            ssl=self.ssl_context,
         ):
             self._change_state(self.states.NONE, self.states.SERVING)
 
