@@ -78,6 +78,22 @@ RE_IDENTIFIER = re.compile(r"^[A-Za-z0-9\-_]{10,250}$")
 """Regular expression for a valid Y Doc identifier."""
 
 
+class TLSProbeFilter(logging.Filter):
+    """Filter to suppress TLS probe errors from websockets handshake failures."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return False to suppress TLS probe noise, True otherwise."""
+        # Suppress "did not receive a valid HTTP request" errors
+        # These are typically from TLS probes or port scanners
+        if record.levelno >= logging.ERROR:
+            msg = record.getMessage()
+            if "did not receive a valid HTTP request" in msg:
+                return False
+            if "connection closed while reading HTTP request" in msg:
+                return False
+        return True
+
+
 class RequestProcessor:
     """
     Collector class of HTTP request processing functions.
@@ -414,12 +430,16 @@ class WebsocketServer(Component):
         """
         Hook handling incoming connections and messages.
         """
+        # Configure logger to filter TLS probe noise
+        conn_logger = logging.getLogger(f"{self.log.name}.ServerConnection")
+        conn_logger.addFilter(TLSProbeFilter())
+
         async with serve(
             self.handle,
             self.host,
             self.port,
             process_request=self.process_request,
-            logger=logging.getLogger(f"{self.log.name}.ServerConnection"),
+            logger=conn_logger,
             ssl=self.ssl_context,
         ):
             self._change_state(self.states.NONE, self.states.SERVING)
