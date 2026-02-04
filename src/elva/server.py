@@ -91,6 +91,17 @@ class TLSProbeFilter(logging.Filter):
                 return False
             if "connection closed while reading HTTP request" in msg:
                 return False
+            # Also check exception text (for tracebacks)
+            if record.exc_text:
+                if "did not receive a valid HTTP request" in record.exc_text:
+                    return False
+                if "connection closed while reading HTTP request" in record.exc_text:
+                    return False
+            # Check exc_info if exc_text not yet formatted
+            if record.exc_info and record.exc_info[1]:
+                exc_str = str(record.exc_info[1])
+                if "did not receive a valid HTTP request" in exc_str:
+                    return False
         return True
 
 
