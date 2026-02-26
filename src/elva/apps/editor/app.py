@@ -19,7 +19,7 @@ from elva.renderer import TextRenderer
 from elva.store import SQLiteStore
 from elva.widgets.awareness import AwarenessView
 from elva.widgets.config import ConfigView
-from elva.widgets.screens import Dashboard, ErrorScreen, InputScreen
+from elva.widgets.screens import Dashboard, ErrorScreen, InputScreen, RoomBrowserScreen
 from elva.widgets.ytextarea import YTextArea
 
 log = logging.getLogger(__package__)
@@ -53,6 +53,7 @@ class UI(App):
         Binding("ctrl+b", "toggle_dashboard", "Toggle the dashboard"),
         Binding("ctrl+s", "save", "Save to data file"),
         Binding("ctrl+r", "render", "Render to file"),
+        Binding("ctrl+r", "browse_rooms", "Rooms"),
     ]
     """Key bindings for actions of the app."""
 
@@ -73,7 +74,7 @@ class UI(App):
 
         self.components = list()
 
-        if c.get("host") is not None:
+        if c.get("host") is not None and c.get("identifier"):
             self.provider = WebsocketProvider(
                 self.ydoc,
                 c["identifier"],
@@ -222,6 +223,10 @@ class UI(App):
             ytextarea = self.query_one(YTextArea)
             ytextarea.load_text(text)
 
+        # auto-browse rooms if no identifier was provided
+        if not self.config.get("identifier") and self.config.get("host"):
+            self.run_worker(self._browse_rooms())
+
     async def on_unmount(self):
         """
         Hook called on unmounting the app.
@@ -331,6 +336,31 @@ class UI(App):
             await self.push_screen("dashboard")
             self.push_client_states()
             self.push_config()
+
+    async def action_browse_rooms(self):
+        """
+        Action performed on triggering the `browse_rooms` key binding.
+        """
+        host = self.config.get("host")
+        if host is None:
+            return
+        self.run_worker(self._browse_rooms())
+
+    async def _browse_rooms(self):
+        """
+        Open the room browser screen and handle selection.
+
+        Must run inside a worker since it uses `push_screen_wait`.
+        """
+        host = self.config.get("host")
+        port = self.config.get("port")
+        screen = RoomBrowserScreen(host, port)
+        room_id = await self.push_screen_wait(screen)
+
+        if room_id is not None:
+            current = self.config.get("identifier")
+            if room_id != current:
+                self.exit(result=room_id)
 
     def push_client_states(self):
         """

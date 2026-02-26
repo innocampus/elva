@@ -2,20 +2,29 @@
 Definition of library constants.
 """
 
+# App name
 APP_NAME = "ELVA"
-"""Default app name."""
 
+# Default port for server and client connections
+DEFAULT_PORT = 7654
+
+# Default host for client connections
+DEFAULT_HOST = "localhost"
+
+# Default configuration file name
 CONFIG_NAME = APP_NAME.lower() + ".toml"
-"""Default ELVA configuration file name."""
 
+# Default data file suffix
 FILE_SUFFIX = ".y"
-"""Default ELVA data file suffix."""
 
+# Default log file suffix
 LOG_SUFFIX = ".log"
-"""Default log file suffix."""
 
+# Directory name where app namespace packages are searched for
 ELVA_APP_DIR_NAME = "apps"
-"""Directory name where app namespace packages are searched for."""
+
+# Directory name where widget namespace packages are expected
+ELVA_WIDGET_DIR_NAME = "widgets"
 
 
 def get_app_import_path(app: str) -> str:
@@ -29,7 +38,3 @@ def get_app_import_path(app: str) -> str:
         the import path of an app namespace package.
     """
     return f"elva.{ELVA_APP_DIR_NAME}.{app}"
-
-
-ELVA_WIDGET_DIR_NAME = "widgets"
-"""Directory name where widget namespace packages are expected."""

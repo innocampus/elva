@@ -15,7 +15,7 @@ from click.core import ParameterSource
 from deepmerge import always_merger
 
 from elva.auth import Password
-from elva.core import APP_NAME, CONFIG_NAME, FILE_SUFFIX, LOG_SUFFIX
+from elva.core import APP_NAME, CONFIG_NAME, DEFAULT_HOST, DEFAULT_PORT, FILE_SUFFIX, LOG_SUFFIX
 from elva.store import get_metadata
 
 #
@@ -579,7 +579,8 @@ host_option = click.option(
     "-h",
     "host",
     metavar="ADDRESS",
-    help="Host of the syncing server.",
+    default=DEFAULT_HOST,
+    help=f"Host of the syncing server (default: {DEFAULT_HOST}).",
 )
 """A CLI command decorator defining an option for the host to connect to."""
 
@@ -588,7 +589,8 @@ port_option = click.option(
     "-p",
     "port",
     type=click.INT,
-    help="Port of the syncing server.",
+    default=DEFAULT_PORT,
+    help=f"Port of the syncing server (default: {DEFAULT_PORT}).",
 )
 """A CLI command decorator defining an option for the port to connect to."""
 
@@ -601,13 +603,13 @@ safe_option = click.option(
 """A CLI command decorator defining a flag for safe or unsafe connections."""
 
 identifier_option = click.option(
+    "--room",
     "--identifier",
     "-i",
     "identifier",
-    help="Unique identifier of the shared document.",
-    default=str(uuid.uuid4()),
+    help="Room name to join (will prompt if not specified).",
 )
-"""A CLI command decorator defining an option for the YDoc identifier."""
+"""A CLI command decorator defining an option for the room/YDoc identifier."""
 
 render_auto_save_option = click.option(
     "--auto-save/--no-auto-save",

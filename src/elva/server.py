@@ -2,6 +2,7 @@
 Module containing server components.
 """
 
+import json
 import logging
 import re
 import socket
@@ -9,6 +10,7 @@ from contextlib import closing
 from http import HTTPStatus
 from pathlib import Path
 from typing import Callable, Iterable
+from urllib.parse import parse_qs, urlparse
 
 import anyio
 from pycrdt import Doc
@@ -469,8 +471,20 @@ class WebsocketServer(Component):
         Returns:
             `None` if an identifier was given, else a [`Response`][websockets.http11.Response] with HTTP status 403 (forbidden).
         """
-        # the request path always includes a `/` as first character
-        path = request.path[1:]
+        # Parse path, stripping query parameters
+        parsed = urlparse(request.path)
+        path = parsed.path[1:]  # Remove leading `/`
+
+        # Handle /rooms endpoint - return list of active rooms as JSON
+        if path == "rooms":
+            rooms_data = self.get_rooms_info()
+            body = json.dumps(rooms_data).encode("utf-8")
+            return Response(
+                status_code=HTTPStatus.OK,
+                headers=Headers({"Content-Type": "application/json"}),
+                reason_phrase="OK",
+                body=body,
+            )
 
         if not RE_IDENTIFIER.match(path):
             return Response(
@@ -478,6 +492,26 @@ class WebsocketServer(Component):
                 headers=Headers(),
                 reason_phrase="Invalid identifier",
             )
+
+    def get_rooms_info(self) -> dict:
+        """
+        Get information about active rooms.
+
+        Returns:
+            A dictionary containing room information.
+        """
+        rooms_list = []
+        for identifier, room in self.rooms.items():
+            if room.states.ACTIVE in room.state:
+                rooms_list.append({
+                    "identifier": identifier,
+                    "clients": len(room.clients),
+                    "persistent": room.persistent,
+                })
+        return {
+            "rooms": rooms_list,
+            "count": len(rooms_list),
+        }
 
     async def get_room(self, identifier: str) -> Room:
         """
@@ -517,16 +551,25 @@ class WebsocketServer(Component):
         Arguments:
             websocket: connection from data are being received.
         """
-        # use the connection path as identifier with leading `/` removed
-        identifier = websocket.request.path[1:]
+        # Parse path and query string
+        parsed = urlparse(websocket.request.path)
+        identifier = parsed.path[1:]  # Remove leading `/`
+        query = parse_qs(parsed.query)
+        client_type = query.get("client", ["unknown"])[0]
+
         room = await self.get_room(identifier)
 
+        # Get client IP for logging
+        remote = websocket.remote_address
+        client_ip = remote[0] if remote else "unknown"
+
         room.add(websocket)
+        self.log.info(f"client {client_ip} ({client_type}) joined room '{identifier}'")
 
         try:
             async for data in websocket:
                 await room.process(data, websocket)
         except ConnectionClosed:
-            self.log.info(f"closed connection {id(websocket)}")
+            self.log.info(f"client {client_ip} ({client_type}) left room '{identifier}'")
         finally:
             room.remove(websocket)

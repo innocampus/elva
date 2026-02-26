@@ -5,6 +5,9 @@ Subcommands are defined in the respective app package.
 """
 
 import importlib
+import json
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 import click
@@ -16,7 +19,7 @@ from elva.cli import (
     file_paths_option_and_argument,
     pass_config,
 )
-from elva.core import APP_NAME, ELVA_APP_DIR_NAME, get_app_import_path
+from elva.core import APP_NAME, DEFAULT_HOST, DEFAULT_PORT, ELVA_APP_DIR_NAME, get_app_import_path
 
 
 @click.group()
@@ -59,6 +62,87 @@ def context(config: dict, *args: tuple, **kwargs: dict):
             config[param] = str(config[param])
 
     click.echo(tomli_w.dumps(config))
+
+
+@elva.command
+@click.option(
+    "--host",
+    "-h",
+    "host",
+    default=DEFAULT_HOST,
+    help=f"Host of the server to query (default: {DEFAULT_HOST}).",
+)
+@click.option(
+    "--port",
+    "-p",
+    "port",
+    type=click.INT,
+    default=DEFAULT_PORT,
+    help=f"Port of the server to query (default: {DEFAULT_PORT}).",
+)
+@click.option(
+    "--safe/--unsafe",
+    "safe",
+    default=None,
+    help="Use HTTPS (--safe) or HTTP (--unsafe). Default: auto-detect.",
+)
+def rooms(host: str, port: int, safe: bool | None):
+    """
+    List active rooms on a server.
+    \f
+
+    Arguments:
+        host: the server hostname.
+        port: the server port.
+        safe: whether to use HTTPS.
+    """
+    # Determine protocol
+    if safe is None:
+        # For localhost, default to HTTP; otherwise try HTTPS first
+        if host in ("localhost", "127.0.0.1", "::1"):
+            protocols = ["http", "https"]
+        else:
+            protocols = ["https", "http"]
+    elif safe:
+        protocols = ["https"]
+    else:
+        protocols = ["http"]
+
+    data = None
+    last_error = None
+
+    for protocol in protocols:
+        url = f"{protocol}://{host}:{port}/rooms"
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                data = json.loads(response.read().decode("utf-8"))
+                break
+        except urllib.error.HTTPError as e:
+            # HTTP error (4xx, 5xx) - don't retry with different protocol
+            raise click.ClickException(f"Server error: {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            # Connection error - try next protocol
+            last_error = e
+            continue
+        except json.JSONDecodeError as e:
+            raise click.ClickException(f"Invalid response from server: {e}")
+
+    if data is None:
+        reason = getattr(last_error, 'reason', last_error)
+        raise click.ClickException(f"Could not connect to server: {reason}")
+
+    rooms_list = data.get("rooms", [])
+    count = data.get("count", len(rooms_list))
+
+    if count == 0:
+        click.echo("No active rooms.")
+    else:
+        click.echo(f"Active rooms ({count}):")
+        for room in rooms_list:
+            identifier = room.get("identifier", "unknown")
+            clients = room.get("clients", 0)
+            persistent = "persistent" if room.get("persistent") else "ephemeral"
+            click.echo(f"  {identifier} ({clients} client(s), {persistent})")
 
 
 ###

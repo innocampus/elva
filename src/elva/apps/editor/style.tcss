@@ -13,6 +13,16 @@ Dashboard {
   }
 }
 
+RoomBrowserScreen {
+  layout: vertical;
+
+  DataTable {
+    height: 1fr;
+    padding: 0 1;
+    border: solid $primary;
+  }
+}
+
 InputScreen {
   layout: grid;
   align: center middle;

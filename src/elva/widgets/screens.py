@@ -2,9 +2,10 @@
 [`Textual`](https://textual.textualize.io/) screens for ELVA apps.
 """
 
+from textual.binding import Binding
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Input, Static
+from textual.widgets import DataTable, Input, Static
 
 from elva.widgets.awareness import AwarenessView
 from elva.widgets.config import ConfigView
@@ -34,6 +35,83 @@ class Dashboard(Screen):
         It dismisses the screen.
         """
         self.dismiss()
+
+
+class RoomBrowserScreen(Screen):
+    """
+    Screen for browsing and selecting available rooms on the server.
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Back"),
+        Binding("g", "refresh_rooms", "Refresh"),
+    ]
+
+    def __init__(self, host: str, port: int, *args, **kwargs):
+        """
+        Arguments:
+            host: the server hostname.
+            port: the server port.
+        """
+        super().__init__(*args, **kwargs)
+        self.host = host
+        self.port = port
+
+    def compose(self):
+        """
+        Hook adding child widgets.
+        """
+        table = DataTable(id="room-table")
+        table.cursor_type = "row"
+        table.add_columns("Room", "Clients", "Persistent")
+        yield table
+
+    async def on_mount(self):
+        """
+        Hook called on mounting the screen. Populates the room table.
+        """
+        self._populate_rooms()
+
+    def _populate_rooms(self):
+        """
+        Fetch rooms from the server and populate the table.
+        """
+        from elva.apps.editor.cli import fetch_rooms_info
+
+        table = self.query_one(DataTable)
+        table.clear()
+
+        rooms = fetch_rooms_info(self.host, self.port)
+        for room in rooms:
+            table.add_row(
+                room["identifier"],
+                str(room["clients"]),
+                "yes" if room["persistent"] else "no",
+                key=room["identifier"],
+            )
+
+        if not rooms:
+            table.add_row("(no rooms found)", "", "", key="__empty__")
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected):
+        """
+        Hook called when a row is selected.
+        """
+        if event.row_key.value == "__empty__":
+            return
+        self.dismiss(event.row_key.value)
+
+    def action_dismiss_screen(self):
+        """
+        Dismiss the screen without selection.
+        """
+        self.dismiss(None)
+
+    def action_refresh_rooms(self):
+        """
+        Refresh the room list.
+        """
+        self._populate_rooms()
 
 
 class InputScreen(ModalScreen):

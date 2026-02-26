@@ -2,6 +2,9 @@
 CLI definition.
 """
 
+import json
+import urllib.request
+import urllib.error
 from importlib import import_module as import_
 
 import click
@@ -10,6 +13,26 @@ from elva.cli import common_options, file_paths_option_and_argument, pass_config
 
 APP_NAME = "editor"
 """The name of the app."""
+
+
+def fetch_rooms_info(host: str, port: int) -> list[dict]:
+    """
+    Fetch list of room info dicts from server.
+
+    Arguments:
+        host: the server hostname.
+        port: the server port.
+
+    Returns:
+        list of room dicts with keys: identifier, clients, persistent.
+    """
+    url = f"http://{host}:{port}/rooms"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return [r for r in data.get("rooms", []) if r.get("identifier")]
+    except (urllib.error.URLError, json.JSONDecodeError):
+        return []
 
 
 @click.command(name=APP_NAME)
@@ -54,9 +77,18 @@ def cli(
         level = logging.getLevelNamesMapping()[level_name]
         log.setLevel(level)
 
-    # run app
-    ui = app.UI(config)
-    ui.run()
+    # run app, loop on room selection
+    while True:
+        ui = app.UI(config)
+        ui.run()
+
+        # check if the app exited with a room selection
+        room_id = ui.return_value
+        if room_id is not None and isinstance(room_id, str):
+            config["identifier"] = room_id
+            continue
+
+        break
 
     # reflect the app's return code
     ctx = click.get_current_context()
