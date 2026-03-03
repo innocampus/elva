@@ -168,6 +168,10 @@ class UI(App):
             topic: the topic under which the changes are published.
             data: manipulation actions taken as well as the origin of the changes.
         """
+        # Update remote cursors immediately (not in worker, to ensure refresh works)
+        self._update_remote_cursors()
+
+        # Handle dashboard updates via worker
         if topic == "change":
             self.run_worker(self._on_awareness_update(topic, data))
 
@@ -177,7 +181,7 @@ class UI(App):
         """
         Hook called on a change in the awareness states.
 
-        It pushes client states to the dashboard and removes offline client IDs from the future.
+        It pushes client states to the dashboard.
 
         Arguments:
             topic: the topic under which the changes are published.
@@ -253,7 +257,7 @@ class UI(App):
         """
         Hook arranging child widgets.
         """
-        yield YTextArea(
+        ytextarea = YTextArea(
             self.ytext,
             tab_behavior="indent",
             show_line_numbers=True,
@@ -262,6 +266,11 @@ class UI(App):
         )
         yield Header(show_clock=False, icon="")
         yield Footer()
+
+        # Set up cursor tracking for awareness
+        if hasattr(self, "provider"):
+            ytextarea.set_cursor_change_callback(self._on_cursor_change)
+        yield ytextarea
 
     @property
     def language(self) -> str:
@@ -375,3 +384,49 @@ class UI(App):
 
         config_view = self.screen.query_one(ConfigView)
         config_view.config = config
+
+    def _on_cursor_change(self, byte_pos: int):
+        """
+        Callback for cursor position changes in the editor.
+
+        Updates the local awareness state with the new cursor position.
+
+        Arguments:
+            byte_pos: the cursor position in UTF-8 bytes.
+        """
+        if not hasattr(self, "provider"):
+            return
+
+        state = self.provider.awareness.get_local_state() or {}
+        state["cursor"] = {"anchor": byte_pos, "head": byte_pos}
+        self.provider.awareness.set_local_state(state)
+
+    def _update_remote_cursors(self):
+        """
+        Update the remote cursor display in the editor.
+
+        Reads cursor positions from awareness states and updates the YTextArea.
+        """
+        if not hasattr(self, "provider"):
+            return
+
+        try:
+            ytextarea = self.query_one(YTextArea)
+        except Exception:
+            return
+
+        my_id = self.provider.awareness.client_id
+        cursors = {}
+
+        for client_id, state in self.provider.awareness.client_states.items():
+            if client_id == my_id:
+                continue
+            if state is None:
+                continue
+
+            cursor = state.get("cursor")
+            if cursor is not None:
+                byte_pos = cursor.get("anchor", cursor.get("head", 0))
+                cursors[client_id] = byte_pos
+
+        ytextarea.update_remote_cursors(cursors)
