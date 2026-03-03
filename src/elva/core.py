@@ -33,3 +33,6 @@ def get_app_import_path(app: str) -> str:
 
 ELVA_WIDGET_DIR_NAME = "widgets"
 """Directory name where widget namespace packages are expected."""
+
+LOCAL_HOSTS = frozenset(["localhost", "127.0.0.1", "::1"])
+"""Hostnames considered local and allowed to serve without TLS."""

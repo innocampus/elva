@@ -2,12 +2,15 @@
 CLI definition.
 """
 
+import ssl
 from importlib import import_module as import_
 from pathlib import Path
 
 import click
 
 from elva.cli import common_options, pass_config_for
+from elva.core import LOCAL_HOSTS
+
 
 APP_NAME = "server"
 """The name of the app."""
@@ -87,6 +90,18 @@ def resolve_persistence(
     help="Enable Dummy Basic Authentication. DO NOT USE IN PRODUCTION.",
     is_flag=True,
 )
+@click.option(
+    "--tls-certificate",
+    "tls_certificate",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to TLS certificate file. Required for non-localhost hosts.",
+)
+@click.option(
+    "--tls-key",
+    "tls_key",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to TLS private key file. Required for non-localhost hosts.",
+)
 @pass_config_for(APP_NAME)
 def cli(config: dict, *args: tuple, **kwargs: dict):
     """
@@ -121,6 +136,33 @@ def cli(config: dict, *args: tuple, **kwargs: dict):
     level_name = config.get("level") or "INFO"
     level = logging.getLevelNamesMapping()[level_name]
     log.setLevel(level)
+
+    # validate TLS requirements for non-local hosts
+    host = config.get("host", "0.0.0.0")
+    tls_certificate = config.get("tls_certificate")
+    tls_key = config.get("tls_key")
+
+    if host not in LOCAL_HOSTS:
+        if tls_certificate is None or tls_key is None:
+            raise click.UsageError(
+                f"TLS certificate and key are required for non-local host '{host}'. "
+                f"Use --tls-certificate and --tls-key options, or bind to localhost."
+            )
+
+    # create TLS context if certificates are provided
+    if tls_certificate is not None and tls_key is not None:
+        tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+        # require at least TLS v1.2
+        tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+
+        tls_context.load_cert_chain(tls_certificate, tls_key)
+        config["tls_context"] = tls_context
+        log.info(f"TLS enabled with certificate {tls_certificate}")
+    elif tls_certificate is not None or tls_key is not None:
+        raise click.UsageError(
+            "Both --tls-certificate and --tls-key must be provided together."
+        )
 
     # run app, catch file permission errors with an appropriate message
     try:
