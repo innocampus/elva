@@ -92,16 +92,16 @@ def resolve_persistence(
     is_flag=True,
 )
 @click.option(
-    "--ssl-cert",
-    "ssl_cert",
+    "--tls-certificate",
+    "tls_certificate",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Path to SSL certificate file. Required for non-localhost hosts.",
+    help="Path to TLS certificate file. Required for non-localhost hosts.",
 )
 @click.option(
-    "--ssl-key",
-    "ssl_key",
+    "--tls-key",
+    "tls_key",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Path to SSL private key file. Required for non-localhost hosts.",
+    help="Path to TLS private key file. Required for non-localhost hosts.",
 )
 @pass_config_for(APP_NAME)
 def cli(config: dict, *args: tuple, **kwargs: dict):
@@ -138,27 +138,27 @@ def cli(config: dict, *args: tuple, **kwargs: dict):
     level = logging.getLevelNamesMapping()[level_name]
     log.setLevel(level)
 
-    # validate SSL requirements for non-local hosts
+    # validate TLS requirements for non-local hosts
     host = config.get("host", "0.0.0.0")
-    ssl_cert = config.get("ssl_cert")
-    ssl_key = config.get("ssl_key")
+    tls_certificate = config.get("tls_certificate")
+    tls_key = config.get("tls_key")
 
     if host not in LOCAL_HOSTS:
-        if ssl_cert is None or ssl_key is None:
+        if tls_certificate is None or tls_key is None:
             raise click.UsageError(
-                f"SSL certificate and key are required for non-local host '{host}'. "
-                f"Use --ssl-cert and --ssl-key options, or bind to localhost."
+                f"TLS certificate and key are required for non-local host '{host}'. "
+                f"Use --tls-certificate and --tls-key options, or bind to localhost."
             )
 
-    # create SSL context if certificates are provided
-    if ssl_cert is not None and ssl_key is not None:
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ssl_context.load_cert_chain(ssl_cert, ssl_key)
-        config["ssl_context"] = ssl_context
-        log.info(f"TLS enabled with certificate {ssl_cert}")
-    elif ssl_cert is not None or ssl_key is not None:
+    # create TLS context if certificates are provided
+    if tls_certificate is not None and tls_key is not None:
+        tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls_context.load_cert_chain(tls_certificate, tls_key)
+        config["tls_context"] = tls_context
+        log.info(f"TLS enabled with certificate {tls_certificate}")
+    elif tls_certificate is not None or tls_key is not None:
         raise click.UsageError(
-            "Both --ssl-cert and --ssl-key must be provided together."
+            "Both --tls-certificate and --tls-key must be provided together."
         )
 
     # run app, catch file permission errors with an appropriate message

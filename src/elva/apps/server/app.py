@@ -46,7 +46,7 @@ async def main(config: dict):
         persistent=persistent,
         path=path,
         process_request=process_request,
-        ssl_context=c.get("ssl_context"),
+        tls_context=c.get("tls_context"),
     )
 
     async with anyio.create_task_group() as tg:
