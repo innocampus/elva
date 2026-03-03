@@ -9,9 +9,8 @@ from pathlib import Path
 import click
 
 from elva.cli import common_options, pass_config_for
+from elva.core import LOCAL_HOSTS
 
-LOCAL_HOSTS = frozenset(["localhost", "127.0.0.1", "::1"])
-"""Hostnames considered local and allowed to serve without TLS."""
 
 APP_NAME = "server"
 """The name of the app."""
@@ -153,6 +152,10 @@ def cli(config: dict, *args: tuple, **kwargs: dict):
     # create TLS context if certificates are provided
     if tls_certificate is not None and tls_key is not None:
         tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+        # require at least TLS v1.2
+        tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+
         tls_context.load_cert_chain(tls_certificate, tls_key)
         config["tls_context"] = tls_context
         log.info(f"TLS enabled with certificate {tls_certificate}")
