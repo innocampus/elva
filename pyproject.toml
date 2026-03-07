@@ -117,4 +117,11 @@ changelog = "https://github.com/innocampus/elva/blob/main/CHANGELOG.md"
 [project.scripts]
 elva = "elva.main:elva"
 
+[tool.pytest.ini_options]
+filterwarnings = [
+    # pycrdt Subscription objects have Rust thread-affinity (!Send) but Python's
+    # GC may drop them from a different thread — harmless, no way to prevent it
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
+
 [tool.setuptools_scm]
