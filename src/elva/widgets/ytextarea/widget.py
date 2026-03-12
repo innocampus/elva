@@ -5,10 +5,14 @@ Widget definition.
 from typing import Self
 
 from pycrdt import Text, UndoManager
+from rich.segment import Segment
+from rich.style import Style
 from textual._tree_sitter import TREE_SITTER, get_language
 from textual.events import MouseDown
+from textual.strip import Strip
 from textual.widgets import TextArea
 
+from elva.awareness import Awareness
 from elva.parser import TextEventParser
 
 from .location import update_location
@@ -42,7 +46,16 @@ class YTextArea(TextArea, TextEventParser):
         """
     """Default CSS."""
 
-    def __init__(self, ytext: Text, *args: tuple, **kwargs: dict):
+    default_cursor_color: str
+    """Color used for remote cursors when there is no color information in the awareness document."""
+
+    def __init__(
+        self,
+        ytext: Text,
+        *args: tuple,
+        awareness: Awareness | None = None,
+        **kwargs: dict,
+    ):
         """
         Arguments:
             ytext: Y text data type holding the text.
@@ -51,6 +64,7 @@ class YTextArea(TextArea, TextEventParser):
         """
         super().__init__(str(ytext), *args, **kwargs)
         self.ytext = ytext
+        self.awareness = awareness
         self.origin = ytext.doc.client_id
 
         # record changes in the YText;
@@ -62,6 +76,9 @@ class YTextArea(TextArea, TextEventParser):
 
         # perform undo and redo solely on our contributions
         self.history.include_origin(self.origin)
+
+        # Initialize remote cursor tracking
+        self.default_cursor_color = "#808080"
 
     @classmethod
     def code_editor(cls, ytext: Text, *args: tuple, **kwargs: dict) -> Self:
@@ -152,6 +169,11 @@ class YTextArea(TextArea, TextEventParser):
         """
         self.subscription_textevent = self.ytext.observe(self.parse)
 
+        if self.awareness is not None:
+            self.subscription_awareness = self.awareness.observe(
+                self._handle_awareness_update
+            )
+
     def on_unmount(self):
         """
         Hook called on unmounting.
@@ -160,6 +182,9 @@ class YTextArea(TextArea, TextEventParser):
         """
         self.ytext.unobserve(self.subscription_textevent)
         del self.subscription_textevent
+
+        if self.awareness is not None:
+            self.awareness.unobserve(self.subscription_awareness)
 
     def load_text(self, text: str, language: str | None = None):
         """
@@ -297,10 +322,17 @@ class YTextArea(TextArea, TextEventParser):
         self._refresh_size()
 
         # replaces edit.after(self)
+        old_selection = self.selection
+
         self.selection = selection
+
+        if selection != old_selection:
+            self._set_cursor_state()
+
         self.record_cursor_width()
 
         self._build_highlight_map()
+
         self.post_message(self.Changed(self))
 
     def _edit(
@@ -317,14 +349,14 @@ class YTextArea(TextArea, TextEventParser):
         Returns:
             the updated selection, top and bottom locations as well as the end location of the insertion range.
         """
-
         edit_result = self.document.replace_range(top, bottom, text)
 
-        start, end = self.selection
         insert_end = edit_result.end_location
 
         delete = Selection(top, bottom)
         insert = Selection(top, insert_end)
+
+        start, end = self.selection
 
         if (start in delete) and (end in delete):
             # the current selection has been deleted, i.e. is within the deletion range;
@@ -351,6 +383,7 @@ class YTextArea(TextArea, TextEventParser):
             end = update_location(end, delete, insert, target_end)
 
         selection = Selection(start, end)
+
         return selection, top, bottom, insert_end
 
     def undo(self):
@@ -455,3 +488,147 @@ class YTextArea(TextArea, TextEventParser):
 
         if center:
             self.scroll_cursor_visible(center)
+
+    def _handle_awareness_update(self, topic, data):
+        """
+        Called in changes in the awareness document.
+        """
+        changes, origin = data
+
+        if origin == "remote":
+            self.refresh()
+
+    def _get_cursor_states(self):
+        """
+        Extract cursor information from the awareness states.
+        """
+        my_id = self.awareness.client_id
+        states = self.awareness.client_states
+
+        cursors = dict()
+
+        for client_id, data in states.items():
+            # skip own id
+            if client_id == my_id:
+                continue
+
+            cursor = data.get("cursor")
+
+            if cursor is not None:
+                istart = cursor["anchor"]
+                iend = cursor["head"]
+
+                start = self.get_location_from_binary_index(istart)
+                end = self.get_location_from_binary_index(iend)
+
+                cursors[client_id] = (start, end)
+
+        return cursors
+
+    def _set_cursor_state(self):
+        """
+        Set cursor information in own awareness state.
+        """
+        start, end = self.selection
+
+        istart = self.get_binary_index_from_location(start)
+        iend = self.get_binary_index_from_location(end)
+
+        cursor = dict(cursor=dict(anchor=istart, head=iend))
+
+        state = self.awareness.get_local_state()
+        state.update(cursor)
+
+        self.awareness.set_local_state(state)
+
+    def _get_cursor_color(self, client_id: int) -> str:
+        """
+        Get a consistent color for a client ID.
+
+        Arguments:
+            client_id: the client identifier.
+
+        Returns:
+            a hex color string.
+        """
+        states = self.awareness.client_states
+        user = states.get("user", {})
+        color = user.get("color", None)
+
+        return color or self.default_cursor_color
+
+    def _watch_selection(self, old: Selection, new: Selection):
+        """
+        Hook called when selection changes.
+
+        Arguments:
+            selection: the new selection.
+        """
+        if hasattr(self, "awareness") and self.awareness is not None:
+            self._set_cursor_state()
+
+    def render_line(self, y: int) -> Strip:
+        """
+        Render a line with remote cursor indicators.
+
+        Arguments:
+            y: the line index (in screen coordinates).
+
+        Returns:
+            the rendered strip.
+        """
+        strip = super().render_line(y)
+
+        cursors = self._get_cursor_states()
+
+        if not cursors:
+            return strip
+
+        # Screen row accounting for scroll
+        screen_row = y + self.scroll_offset.y
+
+        # Collect cursor positions on this line
+        cursor_positions = []
+
+        for client_id, (start, _) in cursors.items():
+            color = self._get_cursor_color(client_id)
+
+            # Convert document location to screen offset (handles wrapping)
+            screen_offset = self.wrapped_document.location_to_offset(start)
+
+            # run calculations only for the screen row containing the cursor
+            if screen_offset.y == screen_row:
+                # Account for gutter width and scroll
+                gutter_width = self.gutter_width
+                scroll_x = self.scroll_offset.x
+                screen_col = screen_offset.x + gutter_width - scroll_x
+
+                if 0 <= screen_col < strip.cell_length:
+                    cursor_positions.append((screen_col, color))
+
+        # Apply cursor highlights by dividing and rejoining the strip
+        for screen_col, color in cursor_positions:
+            strip_len = strip.cell_length
+            if screen_col >= strip_len:
+                continue
+
+            # Divide at cursor position and cursor+1
+            end_col = min(screen_col + 1, strip_len)
+            parts = strip.divide([screen_col, end_col, strip_len])
+
+            if len(parts) >= 2:
+                # Apply background color to the cursor character.
+                # We combine styles since apply_style doesn't override existing bgcolor.
+                cursor_style = Style(bgcolor=color)
+                cursor_part = parts[1]
+                # NOTE: _segments is a Textual private API; Strip doesn't expose
+                # a public way to iterate or restyle individual segments.
+                new_segments = []
+                for seg in cursor_part._segments:
+                    combined_style = (seg.style or Style()) + cursor_style
+                    new_segments.append(Segment(seg.text, combined_style))
+                styled_part = Strip(new_segments)
+                # Rejoin the strip
+                strip = Strip.join([parts[0], styled_part] + parts[2:])
+
+        return strip

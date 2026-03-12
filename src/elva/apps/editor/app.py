@@ -168,6 +168,7 @@ class UI(App):
             topic: the topic under which the changes are published.
             data: manipulation actions taken as well as the origin of the changes.
         """
+        # Handle dashboard updates via worker
         if topic == "change":
             self.run_worker(self._on_awareness_update(topic, data))
 
@@ -177,7 +178,7 @@ class UI(App):
         """
         Hook called on a change in the awareness states.
 
-        It pushes client states to the dashboard and removes offline client IDs from the future.
+        It pushes client states to the dashboard.
 
         Arguments:
             topic: the topic under which the changes are published.
@@ -253,12 +254,18 @@ class UI(App):
         """
         Hook arranging child widgets.
         """
+        if hasattr(self, "provider"):
+            awareness = self.provider.awareness
+        else:
+            awareness = None
+
         yield YTextArea(
             self.ytext,
             tab_behavior="indent",
             show_line_numbers=True,
             id="editor",
             language=self.language,
+            awareness=awareness,
         )
         yield Header(show_clock=False, icon="")
         yield Footer()
