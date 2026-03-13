@@ -326,7 +326,7 @@ class YTextArea(TextArea, TextEventParser):
 
         self.selection = selection
 
-        if selection != old_selection:
+        if self.awareness is not None and selection != old_selection:
             self._set_cursor_state()
 
         self.record_cursor_width()
@@ -578,6 +578,9 @@ class YTextArea(TextArea, TextEventParser):
             the rendered strip.
         """
         strip = super().render_line(y)
+
+        if self.awareness is None:
+            return strip
 
         cursors = self._get_cursor_states()
 
