@@ -2,7 +2,6 @@
 Widget definition.
 """
 
-from os import linesep as LINESEP
 from typing import Self
 
 from pycrdt import Text, UndoManager
@@ -10,12 +9,10 @@ from rich.segment import Segment
 from rich.style import Style
 from textual.strip import Strip
 from textual.widgets import TextArea
+from textual.widgets.text_area import Selection
 
 from elva.awareness import Awareness
 from elva.parser import TextEventParser
-
-from .location import update_location
-from .selection import Selection
 
 
 class YTextArea(TextArea, TextEventParser):
@@ -209,11 +206,11 @@ class YTextArea(TextArea, TextEventParser):
         """
         _start, _end = sorted((start, end))
 
+        istart = self.get_binary_index_from_location(_start)
+        iend = self.get_binary_index_from_location(_end)
+
         if origin == "local":
             doc = self.ytext.doc
-
-            istart = self.get_binary_index_from_location(_start)
-            iend = self.get_binary_index_from_location(_end)
 
             # perform an atomic edit
             with doc.transaction(origin=self.origin):
@@ -223,11 +220,9 @@ class YTextArea(TextArea, TextEventParser):
                 if insert:
                     self.ytext.insert(istart, insert)
 
-        offset = self._edit_offset(insert)
+        ninsert = len(insert.encode())
 
-        insert_end = (_start[0] + offset[0], _start[1] + offset[1])
-
-        self._update_cursors(_start, _end, insert_end)
+        self._update_cursors(istart, iend, ninsert)
 
         return super().replace(
             insert,
@@ -236,26 +231,29 @@ class YTextArea(TextArea, TextEventParser):
             maintain_selection_offset=maintain_selection_offset,
         )
 
-    def _edit_offset(self, insert):
-        lines = insert.split(LINESEP)
-        last = lines[-1]
+    def update_index(self, index, start, end, insert, target):
+        if index < start:
+            pass
+        elif start <= index <= end:
+            index = target
+        elif end < index:
+            index += insert - (end - start)
 
-        return (len(lines) - 1, len(last))
+        return index
 
     def _update_cursors(self, start, end, insert):
-        delete = Selection(start, end)
-        insert = Selection(start, insert)
+        insert_end = start + insert
 
         for client, cursor in self._remote_cursors.copy().items():
-            if start > end:
-                target_anchor, target_head = insert.start, insert.end
-            else:
-                target_anchor, target_head = insert.end, insert.start
-
             anchor, head = cursor
 
-            anchor = update_location(anchor, delete, insert, target_anchor)
-            head = update_location(head, delete, insert, target_head)
+            if anchor > head:
+                target_anchor, target_head = start, insert_end
+            else:
+                target_anchor, target_head = insert_end, start
+
+            anchor = self.update_index(anchor, start, end, insert, target_anchor)
+            head = self.update_index(head, start, end, insert, target_head)
 
             self._remote_cursors[client] = (anchor, head)
 
@@ -308,11 +306,7 @@ class YTextArea(TextArea, TextEventParser):
             if cursor is not None:
                 ianchor = cursor["anchor"]
                 ihead = cursor["head"]
-
-                anchor = self.get_location_from_binary_index(ianchor)
-                head = self.get_location_from_binary_index(ihead)
-
-                cursors[client] = (anchor, head)
+                cursors[client] = (ianchor, ihead)
 
         return cursors
 
@@ -387,6 +381,8 @@ class YTextArea(TextArea, TextEventParser):
 
         for client, (anchor, head) in cursors.items():
             color = self._get_cursor_color(client)
+
+            anchor = self.get_location_from_binary_index(anchor)
 
             # cap the maximum location, just to be sure
             anchor = min(anchor, self.document.end)
