@@ -2,13 +2,12 @@
 Widget definition.
 """
 
+from os import linesep as LINESEP
 from typing import Self
 
 from pycrdt import Text, UndoManager
 from rich.segment import Segment
 from rich.style import Style
-from textual._tree_sitter import TREE_SITTER, get_language
-from textual.events import MouseDown
 from textual.strip import Strip
 from textual.widgets import TextArea
 
@@ -69,13 +68,15 @@ class YTextArea(TextArea, TextEventParser):
 
         # record changes in the YText;
         # overwrites TextArea.history
-        self.history = UndoManager(
+        self.yhistory = UndoManager(
             scopes=[ytext],
             capture_timeout_millis=300,
         )
 
         # perform undo and redo solely on our contributions
-        self.history.include_origin(self.origin)
+        self.yhistory.include_origin(self.origin)
+
+        self._remote_cursors = dict()
 
         # Initialize remote cursor tracking
         self.default_cursor_color = "#808080"
@@ -145,7 +146,7 @@ class YTextArea(TextArea, TextEventParser):
         index = self.document.get_index_from_location(location)
         return self.get_binary_index_from_index(index)
 
-    def _on_edit(self, retain: int = 0, delete: int = 0, insert: str = ""):
+    def _on_edit(self, retain: int = 0, delete: int = 0, insert: str = "", txn=None):
         """
         Hook called from the [`parse`][elva.parser.TextEventParser] method.
 
@@ -154,12 +155,15 @@ class YTextArea(TextArea, TextEventParser):
             delete: the length of the deletion range.
             insert: the insert text.
         """
+        if txn.origin == self.origin:
+            return
+
         # convert from binary index to document locations
         start = self.get_location_from_binary_index(retain)
         end = self.get_location_from_binary_index(retain + delete)
 
-        # apply the update to the UI
-        self._apply_update(insert, start, end)
+        # update UI
+        self.replace(insert, start, end, origin="remote")
 
     def on_mount(self):
         """
@@ -173,6 +177,7 @@ class YTextArea(TextArea, TextEventParser):
             self.subscription_awareness = self.awareness.observe(
                 self._handle_awareness_update
             )
+            self._set_cursor_state()
 
     def on_unmount(self):
         """
@@ -186,29 +191,13 @@ class YTextArea(TextArea, TextEventParser):
         if self.awareness is not None:
             self.awareness.unobserve(self.subscription_awareness)
 
-    def load_text(self, text: str, language: str | None = None):
-        """
-        Load a text into the document.
-
-        Arguments:
-            text: the text to display.
-            language: the tree-sitter syntax highlighting language to use.
-        """
-        self.replace(text, self.document.start, self.document.end)
-
-        if not self.is_mounted:
-            self.document.replace_range(self.document.start, self.document.end, text)
-
-        if language:
-            self.language = language
-
-        self.post_message(self.Changed(self).set_sender(self))
-
     def replace(
         self,
         insert: str,
         start: tuple,
         end: tuple,
+        maintain_selection_offset: bool = True,
+        origin: str = "local",
     ):
         """
         Replace part of the text in the Y text data type.
@@ -218,276 +207,77 @@ class YTextArea(TextArea, TextEventParser):
             start: the start location of the deletion range.
             end: the end location of the deletion range.
         """
-        start, end = sorted((start, end))
+        _start, _end = sorted((start, end))
 
-        doc = self.ytext.doc
+        if origin == "local":
+            doc = self.ytext.doc
 
-        istart = self.get_binary_index_from_location(start)
-        iend = self.get_binary_index_from_location(end)
+            istart = self.get_binary_index_from_location(_start)
+            iend = self.get_binary_index_from_location(_end)
 
-        # perform an atomic edit
-        with doc.transaction(origin=self.origin):
-            if not istart == iend:
-                del self.ytext[istart:iend]
+            # perform an atomic edit
+            with doc.transaction(origin=self.origin):
+                if not istart == iend:
+                    del self.ytext[istart:iend]
 
-            if insert:
-                self.ytext.insert(istart, insert)
+                if insert:
+                    self.ytext.insert(istart, insert)
 
-    def delete(self, start: tuple, end: tuple):
-        """
-        Delete a range of text.
+        offset = self._edit_offset(insert)
 
-        Arguments:
-            start: the start location of the deletion range.
-            end: the end location of the deletion range.
-        """
-        start, end = sorted((start, end))
-        self.replace("", start, end)
+        insert_end = (_start[0] + offset[0], _start[1] + offset[1])
 
-    def insert(self, text: str, location: tuple = None):
-        """
-        Insert characters at a given location.
+        self._update_cursors(_start, _end, insert_end)
 
-        Arguments:
-            text: the characters to insert.
-            location: the start location of the insertion.
-        """
-        if location is None:
-            location = self.cursor_location
+        return super().replace(
+            insert,
+            start,
+            end,
+            maintain_selection_offset=maintain_selection_offset,
+        )
 
-        self.replace(text, location, location)
+    def _edit_offset(self, insert):
+        lines = insert.split(LINESEP)
+        last = lines[-1]
 
-    def clear(self):
-        """
-        Remove all content from the document.
-        """
-        self.replace("", self.document.start, self.document.end)
+        return (len(lines) - 1, len(last))
 
-    def _replace_via_keyboard(self, insert: str, start: tuple, end: tuple):
-        """
-        Guard method respecting the [`read_only`][textual.widgets.TextArea.read_only]
-        attribute before calling [`replace`][elva.widgets.ytextarea.YTextArea]
-        to replace a range of text.
+    def _update_cursors(self, start, end, insert):
+        delete = Selection(start, end)
+        insert = Selection(start, insert)
 
-        Arguments:
-            insert: the characters to insert.
-            start: the start location of the deletion range.
-            end: the end location of the deletion range.
-        """
-        if self.read_only:
-            return
-
-        self.replace(insert, start, end)
-
-    def _delete_via_keyboard(self, start: tuple, end: tuple):
-        """
-        Guard method respecting the [`read_only`][textual.widgets.TextArea.read_only]
-        attribute before calling [`replace`][elva.widgets.ytextarea.YTextArea]
-        to delete a range of text.
-
-        Arguments:
-            start: the start location of the deletion range.
-            end: the end location of the deletion range.
-        """
-        self._replace_via_keyboard("", start, end)
-
-    def _apply_update(self, text: str, start: tuple, end: tuple):
-        """
-        Apply a Y text data type update to the document.
-
-        Arguments:
-            text: the characters to insert.
-            start: the start location of the deletion range.
-            end: the end location of the deletion range.
-        """
-        old_gutter_width = self.gutter_width
-
-        # replaces edit.do(self)
-        selection, top, bottom, insert_end = self._edit(text, start, end)
-
-        new_gutter_width = self.gutter_width
-
-        if old_gutter_width != new_gutter_width:
-            self.wrapped_document.wrap(
-                self.wrap_width,
-                self.indent_width,
-            )
-        else:
-            self.wrapped_document.wrap_range(
-                top,
-                bottom,
-                insert_end,
-            )
-
-        self._refresh_size()
-
-        # replaces edit.after(self)
-        old_selection = self.selection
-
-        self.selection = selection
-
-        if self.awareness is not None and selection != old_selection:
-            self._set_cursor_state()
-
-        self.record_cursor_width()
-
-        self._build_highlight_map()
-
-        self.post_message(self.Changed(self))
-
-    def _edit(
-        self, text: str, top: tuple, bottom: tuple
-    ) -> tuple[Selection, tuple, tuple, tuple]:
-        """
-        Perform the edit operation.
-
-        Args:
-            text: the characters to insert.
-            top: the minimum of start and end location of the deletion range.
-            bottom: the maximum of start and end location of the deletion range.
-
-        Returns:
-            the updated selection, top and bottom locations as well as the end location of the insertion range.
-        """
-        edit_result = self.document.replace_range(top, bottom, text)
-
-        insert_end = edit_result.end_location
-
-        delete = Selection(top, bottom)
-        insert = Selection(top, insert_end)
-
-        start, end = self.selection
-
-        if (start in delete) and (end in delete):
-            # the current selection has been deleted, i.e. is within the deletion range;
-            # reset cursor to end of edit, i.e. insert range
-            start, end = insert.end, insert.end
-        else:
-            # reverse target locations if the current selection is reversed
+        for client, cursor in self._remote_cursors.copy().items():
             if start > end:
-                target_start, target_end = insert.start, insert.end
+                target_anchor, target_head = insert.start, insert.end
             else:
-                target_start, target_end = insert.end, insert.start
+                target_anchor, target_head = insert.end, insert.start
 
-            ## start
-            # before edit - no-op
-            # within edit - shift to end of edit
-            #  after edit - shift by edit length
+            anchor, head = cursor
 
-            ## end
-            # before edit - no-op
-            # within edit - shift to start of edit
-            #  after edit - shift by edit length
+            anchor = update_location(anchor, delete, insert, target_anchor)
+            head = update_location(head, delete, insert, target_head)
 
-            start = update_location(start, delete, insert, target_start)
-            end = update_location(end, delete, insert, target_end)
+            self._remote_cursors[client] = (anchor, head)
 
-        selection = Selection(start, end)
-
-        return selection, top, bottom, insert_end
+    def delete(self, start, end, maintain_selection_offset=True):
+        return self.replace(
+            "",
+            start,
+            end,
+            maintain_selection_offset=maintain_selection_offset,
+        )
 
     def undo(self):
         """
         Undo an edit done by this widget.
         """
-        self.history.undo()
+        self.yhistory.undo()
 
     def redo(self):
         """
         Redo an edit done by this widget.
         """
-        self.history.redo()
-
-    def _watch_language(self, new: str | None):
-        """
-        Hook called on change in the [`language`][textual.widgets.TextArea.language] attribute.
-
-        Arguments:
-            new: the new language.
-        """
-        self._highlight_query = None
-
-        if not new:
-            return
-
-        if not TREE_SITTER:
-            self.log.warning("tree-sitter not supported in this environment")
-            return
-
-        registered = self._languages.get(new)
-
-        if registered:
-            query = registered.highlight_query
-            lang = registered.language or get_language(new)
-        else:
-            query = self._get_builtin_highlight_query(new)
-            lang = get_language(new)
-
-        if lang is not None:
-            self._highlight_query = self.document.prepare_query(query)
-        else:
-            self.log.warning(f"tree-sitter language '{new}' not found")
-
-        self._build_highlight_map()
-
-    def _watch_has_focus(self, new: bool):
-        """
-        Hook called on change of the [`has_focus`][textual.widget.Widget.has_focus] attribute.
-
-        Arguments:
-            new: the new value.
-        """
-        self._cursor_visible = new
-
-        if new:
-            self._restart_blink()
-            self.app.cursor_position = self.cursor_screen_offset
-        else:
-            self._pause_blink(visible=False)
-
-    async def _on_mouse_down(self, event: MouseDown):
-        """
-        Hook on a pressed mouse button.
-
-        Arguments:
-            event: an object containing event information.
-        """
-        event.stop()
-        event.prevent_default()
-        target = self.get_target_document_location(event)
-        self.selection = Selection.cursor(target)
-        self._selecting = True
-
-        self.capture_mouse()
-        self._pause_blink(visible=True)
-
-    def move_cursor(
-        self,
-        location: tuple,
-        select: bool = False,
-        center: bool = False,
-        record_width: bool = True,
-    ):
-        """
-        Move the cursor to a given location and adapt the scroll position.
-
-        Arguments:
-            location: the location to move the cursor to
-            select: flag whether to expand the current selection or just move the cursor.
-            center: flag whether to scroll the view.
-            record_width: flag whether to record the cursor width.
-        """
-        if select:
-            start, _ = self.selection
-            self.selection = Selection(start, location)
-        else:
-            self.selection = Selection.cursor(location)
-
-        if record_width:
-            self.record_cursor_width()
-
-        if center:
-            self.scroll_cursor_visible(center)
+        self.yhistory.redo()
 
     def _handle_awareness_update(self, topic, data):
         """
@@ -496,32 +286,33 @@ class YTextArea(TextArea, TextEventParser):
         changes, origin = data
 
         if origin == "remote":
+            self._remote_cursors = self._get_cursor_states()
             self.refresh()
 
     def _get_cursor_states(self):
         """
         Extract cursor information from the awareness states.
         """
-        my_id = self.awareness.client_id
+        me = self.awareness.client_id
         states = self.awareness.client_states
 
         cursors = dict()
 
-        for client_id, data in states.items():
+        for client, state in states.items():
             # skip own id
-            if client_id == my_id:
+            if client == me:
                 continue
 
-            cursor = data.get("cursor")
+            cursor = state.get("cursor")
 
             if cursor is not None:
-                istart = cursor["anchor"]
-                iend = cursor["head"]
+                ianchor = cursor["anchor"]
+                ihead = cursor["head"]
 
-                start = self.get_location_from_binary_index(istart)
-                end = self.get_location_from_binary_index(iend)
+                anchor = self.get_location_from_binary_index(ianchor)
+                head = self.get_location_from_binary_index(ihead)
 
-                cursors[client_id] = (start, end)
+                cursors[client] = (anchor, head)
 
         return cursors
 
@@ -529,19 +320,19 @@ class YTextArea(TextArea, TextEventParser):
         """
         Set cursor information in own awareness state.
         """
-        start, end = self.selection
+        anchor, head = self.selection
 
-        istart = self.get_binary_index_from_location(start)
-        iend = self.get_binary_index_from_location(end)
+        ianchor = self.get_binary_index_from_location(anchor)
+        ihead = self.get_binary_index_from_location(head)
 
-        cursor = dict(cursor=dict(anchor=istart, head=iend))
+        cursor = dict(cursor=dict(anchor=ianchor, head=ihead))
 
         state = self.awareness.get_local_state()
         state.update(cursor)
 
         self.awareness.set_local_state(state)
 
-    def _get_cursor_color(self, client_id: int) -> str:
+    def _get_cursor_color(self, client: int) -> str:
         """
         Get a consistent color for a client ID.
 
@@ -552,7 +343,8 @@ class YTextArea(TextArea, TextEventParser):
             a hex color string.
         """
         states = self.awareness.client_states
-        user = states.get("user", {})
+        state = states.get(client, {})
+        user = state.get("user", {})
         color = user.get("color", None)
 
         return color or self.default_cursor_color
@@ -582,7 +374,7 @@ class YTextArea(TextArea, TextEventParser):
         if self.awareness is None:
             return strip
 
-        cursors = self._get_cursor_states()
+        cursors = self._remote_cursors
 
         if not cursors:
             return strip
@@ -593,11 +385,14 @@ class YTextArea(TextArea, TextEventParser):
         # Collect cursor positions on this line
         cursor_positions = []
 
-        for client_id, (start, _) in cursors.items():
-            color = self._get_cursor_color(client_id)
+        for client, (anchor, head) in cursors.items():
+            color = self._get_cursor_color(client)
+
+            # cap the maximum location, just to be sure
+            anchor = min(anchor, self.document.end)
 
             # Convert document location to screen offset (handles wrapping)
-            screen_offset = self.wrapped_document.location_to_offset(start)
+            screen_offset = self.wrapped_document.location_to_offset(anchor)
 
             # run calculations only for the screen row containing the cursor
             if screen_offset.y == screen_row:

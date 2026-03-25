@@ -129,6 +129,7 @@ class WebsocketProvider(Component):
             # subscribe to changes in YDoc and Awareness, so that those callbacks
             # can put messages into the send buffer
             self._ydoc_subscription = self.ydoc.observe(self._on_transaction_event)
+
             self._awareness_subscription = self.awareness.observe(
                 self._on_awareness_change
             )
