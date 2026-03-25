@@ -343,12 +343,9 @@ class YTextArea(TextArea, TextEventParser):
 
         return color or self.default_cursor_color
 
-    def _watch_selection(self, old: Selection, new: Selection):
+    def _watch_selection(self):
         """
         Hook called when selection changes.
-
-        Arguments:
-            selection: the new selection.
         """
         if hasattr(self, "awareness") and self.awareness is not None:
             self._set_cursor_state()
