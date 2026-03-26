@@ -527,23 +527,24 @@ class YTextArea(TextArea, TextEventParser):
             if screen_col >= strip_len:
                 continue
 
-            # Divide at cursor position and cursor+1
+            # divide at cursor position and cursor + 1
             end_col = min(screen_col + 1, strip_len)
             parts = strip.divide([screen_col, end_col, strip_len])
 
             if len(parts) >= 2:
-                # Apply background color to the cursor character.
-                # We combine styles since apply_style doesn't override existing bgcolor.
+                # define background color style
                 cursor_style = Style(bgcolor=color)
-                cursor_part = parts[1]
-                # NOTE: _segments is a Textual private API; Strip doesn't expose
-                # a public way to iterate or restyle individual segments.
-                new_segments = []
-                for seg in cursor_part._segments:
-                    combined_style = (seg.style or Style()) + cursor_style
-                    new_segments.append(Segment(seg.text, combined_style))
-                styled_part = Strip(new_segments)
-                # Rejoin the strip
-                strip = Strip.join([parts[0], styled_part] + parts[2:])
+
+                # apply styles to segments instead of to the strip directly since
+                # `Strip.apply_style` doesn't override existing bgcolor:
+                # its `style` gets overwritten by the inner segment styles;
+                # a fix by exposing the `post_style` parameter has been proposed;
+                # see https://github.com/Textualize/textual/issues/6448
+                segments = [seg for seg in parts[1]]
+                segments = Segment.apply_style(segments, post_style=cursor_style)
+                parts[1] = Strip(segments)
+
+                # rejoin the strip
+                strip = Strip.join(parts)
 
         return strip
