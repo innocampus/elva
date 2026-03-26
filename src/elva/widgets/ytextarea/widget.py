@@ -2,14 +2,15 @@
 Widget definition.
 """
 
-from typing import Self
+from collections import deque
+from typing import Self, Literal
 
-from pycrdt import Text, UndoManager
+from pycrdt import Text, UndoManager, ReadTransaction
 from rich.segment import Segment
 from rich.style import Style
 from textual.strip import Strip
 from textual.widgets import TextArea
-from textual.widgets.text_area import Selection
+from textual.widgets.text_area import Location, EditResult
 
 from elva.awareness import Awareness
 from elva.parser import TextEventParser
@@ -19,15 +20,6 @@ class YTextArea(TextArea, TextEventParser):
     """
     Widget for displaying and manipulating text synchronized in realtime.
     """
-
-    ytext: Text
-    """The Y Text data type holding the text."""
-
-    origin: int
-    """The own origin of edits."""
-
-    history: UndoManager
-    """The history manager for undo and redo operations."""
 
     DEFAULT_CSS = """
         YTextArea {
@@ -42,6 +34,18 @@ class YTextArea(TextArea, TextEventParser):
         """
     """Default CSS."""
 
+    ytext: Text
+    """The Y Text data type holding the text."""
+
+    origin: int
+    """The own origin of edits."""
+
+    yhistory: UndoManager
+    """The history manager for undo and redo operations."""
+
+    cursor_cache_size: int
+    """The maxmimum number of cursor positions saved in the cache."""
+
     default_cursor_color: str
     """Color used for remote cursors when there is no color information in the awareness document."""
 
@@ -50,6 +54,7 @@ class YTextArea(TextArea, TextEventParser):
         ytext: Text,
         *args: tuple,
         awareness: Awareness | None = None,
+        cursor_cache_size: int = 100,
         **kwargs: dict,
     ):
         """
@@ -73,9 +78,11 @@ class YTextArea(TextArea, TextEventParser):
         # perform undo and redo solely on our contributions
         self.yhistory.include_origin(self.origin)
 
-        self._remote_cursors = dict()
+        # initialize remote cursor tracking
+        self._remote_cursor_caches = dict()
+        self.cursor_cache_size = cursor_cache_size
 
-        # Initialize remote cursor tracking
+        # default color for remote cursors
         self.default_cursor_color = "#808080"
 
     @classmethod
@@ -143,7 +150,13 @@ class YTextArea(TextArea, TextEventParser):
         index = self.document.get_index_from_location(location)
         return self.get_binary_index_from_index(index)
 
-    def _on_edit(self, retain: int = 0, delete: int = 0, insert: str = "", txn=None):
+    def _on_edit(
+        self,
+        retain: int = 0,
+        delete: int = 0,
+        insert: str = "",
+        txn: ReadTransaction | None = None,
+    ) -> None:
         """
         Hook called from the [`parse`][elva.parser.TextEventParser] method.
 
@@ -151,15 +164,17 @@ class YTextArea(TextArea, TextEventParser):
             retain: the cursor to position at which the deletio and insertion range starts.
             delete: the length of the deletion range.
             insert: the insert text.
+            txn: the transaction associated with the ytext update.
         """
         if txn.origin == self.origin:
+            # this update was done locally and the UI has already been updated
             return
 
         # convert from binary index to document locations
         start = self.get_location_from_binary_index(retain)
         end = self.get_location_from_binary_index(retain + delete)
 
-        # update UI
+        # perform the edit and update the app state
         self.replace(insert, start, end, origin="remote")
 
     def on_mount(self):
@@ -174,6 +189,8 @@ class YTextArea(TextArea, TextEventParser):
             self.subscription_awareness = self.awareness.observe(
                 self._handle_awareness_update
             )
+
+            # send an awareness update when ready
             self._set_cursor_state()
 
     def on_unmount(self):
@@ -195,7 +212,7 @@ class YTextArea(TextArea, TextEventParser):
         end: tuple,
         maintain_selection_offset: bool = True,
         origin: str = "local",
-    ):
+    ) -> EditResult:
         """
         Replace part of the text in the Y text data type.
 
@@ -203,12 +220,16 @@ class YTextArea(TextArea, TextEventParser):
             insert: the characters to insert.
             start: the start location of the deletion range.
             end: the end location of the deletion range.
+
+        Returns:
+            the result of the performed edit.
         """
         _start, _end = sorted((start, end))
 
         istart = self.get_binary_index_from_location(_start)
         iend = self.get_binary_index_from_location(_end)
 
+        # don't redo remote updates twice in the ytext
         if origin == "local":
             doc = self.ytext.doc
 
@@ -220,44 +241,102 @@ class YTextArea(TextArea, TextEventParser):
                 if insert:
                     self.ytext.insert(istart, insert)
 
+        # precalculate the new cursor positions as
+        # `replace` also refreshes the screen and with it all cursors
         ninsert = len(insert.encode())
-
         self._update_cursors(istart, iend, ninsert)
 
-        return super().replace(
+        # perform the edit in `document` and update the app state
+        edit = super().replace(
             insert,
             start,
             end,
             maintain_selection_offset=maintain_selection_offset,
         )
 
-    def update_index(self, index, start, end, insert, target):
+        # return the result to conform with the superclass
+        return edit
+
+    def _update_index(
+        self,
+        index: int,
+        start: int,
+        end: int,
+        insert: int,
+        target: int,
+    ) -> int:
+        """
+        Recalculate an index based on edit metrics.
+
+        Arguments:
+            index: the index to update.
+            start: start of the deletion range.
+            end: end of the deletion range.
+            target: the index to return when `index` is within the deletion range.
+
+        Returns:
+            the updated index.
+        """
         if index < start:
+            # the index is before the deletion range,
+            # so not influenced by deletion and insertion and left as is
             pass
-        elif start <= index <= end:
+        elif start <= index < end:
+            # the index is with the deletion range,
+            # reset index to `target`
             index = target
-        elif end < index:
+        elif end <= index:
+            # the index is behind the deletion range,
+            # move by difference in length of deleted and inserted text
             index += insert - (end - start)
 
         return index
 
-    def _update_cursors(self, start, end, insert):
+    def _update_cursors(self, start: int, end: int, insert: int) -> None:
+        """
+        Recalculate the remote cursor positions based on edit metrics.
+
+        Arguments:
+            start: start of the deletion range.
+            end: end of the deletion range.
+            insert: the length of the inserted text.
+        """
         insert_end = start + insert
 
-        for client, cursor in self._remote_cursors.copy().items():
-            anchor, head = cursor
+        for client, cache in self._remote_cursor_caches.items():
+            # use the latest known cursor position
+            anchor, head = cache[-1]
 
+            # set the target index, for indices within a deletion range, accordingly
             if anchor > head:
                 target_anchor, target_head = start, insert_end
             else:
                 target_anchor, target_head = insert_end, start
 
-            anchor = self.update_index(anchor, start, end, insert, target_anchor)
-            head = self.update_index(head, start, end, insert, target_head)
+            # update the cursor indices
+            anchor = self._update_index(anchor, start, end, insert, target_anchor)
+            head = self._update_index(head, start, end, insert, target_head)
 
-            self._remote_cursors[client] = (anchor, head)
+            # append the new cursor positions
+            cache.append((anchor, head))
 
-    def delete(self, start, end, maintain_selection_offset=True):
+    def delete(
+        self,
+        start: Location,
+        end: Location,
+        maintain_selection_offset: bool = True,
+    ) -> EditResult:
+        """
+        Delete text between a start and an end location.
+
+        Arguments:
+            start: start of the deletion range.
+            end: end of the deletion range.
+            maintain_selection_offset: keep the selection or reset it the the end of the edit.
+
+        Returns:
+            the result of the performed edit.
+        """
         return self.replace(
             "",
             start,
@@ -265,65 +344,108 @@ class YTextArea(TextArea, TextEventParser):
             maintain_selection_offset=maintain_selection_offset,
         )
 
-    def undo(self):
+    def undo(self) -> None:
         """
         Undo an edit done by this widget.
         """
         self.yhistory.undo()
 
-    def redo(self):
+    def redo(self) -> None:
         """
         Redo an edit done by this widget.
         """
         self.yhistory.redo()
 
-    def _handle_awareness_update(self, topic, data):
+    def _handle_awareness_update(
+        self,
+        topic: Literal["update", "change"],
+        data: tuple[dict[str, tuple], str],
+    ) -> None:
         """
         Called in changes in the awareness document.
+
+        Arguments:
+            topic: the kind of awareness update, either `"update"` or `"change"`.
+            data: a tuple with the changes and the origin of the awareness update.
         """
         changes, origin = data
 
-        if origin == "remote":
-            self._remote_cursors = self._get_cursor_states()
+        # update remote cursors only when we got a `"change"` update from remote
+        if topic == "change" and origin == "remote":
+            self._update_cursor_caches(changes)
+
+            # refresh the UI
             self.refresh()
 
-    def _get_cursor_states(self):
+    def _update_cursor_caches(self, changes: dict[str, tuple]) -> None:
         """
-        Extract cursor information from the awareness states.
+        Extract cursor information from the awareness states and compare them
+        to the local cursor history.
+
+        Arguments:
+            changes: a mapping of `"added"`, `"updated"` and `"removed"` clients.
         """
-        me = self.awareness.client_id
         states = self.awareness.client_states
+        caches = self._remote_cursor_caches
 
-        cursors = dict()
+        for client in changes["removed"]:
+            caches.pop(client, None)
 
-        for client, state in states.items():
-            # skip own id
-            if client == me:
+        for client in changes["added"] + changes["updated"]:
+            state = states.get(client, {})
+            cursor = state.get("cursor", {})
+
+            ianchor = cursor.get("anchor", None)
+            ihead = cursor.get("head", None)
+
+            if ianchor is None or ihead is None:
+                # the awareness state does not provide cursor information
                 continue
 
-            cursor = state.get("cursor")
+            received = (ianchor, ihead)
 
-            if cursor is not None:
-                ianchor = cursor["anchor"]
-                ihead = cursor["head"]
-                cursors[client] = (ianchor, ihead)
+            # set a maximum length to avoid unbound growing, e.g. while offline
+            cache = caches.setdefault(client, deque(maxlen=self.cursor_cache_size))
 
-        return cursors
+            # remove the first cursor position, i.e. the next one expected, from
+            # the cache if possible and compare it to the received one:
+            # if they are the same, add this position back if the cache has been
+            # emptied for the comparison;
+            # if not, invalidate the cache and add the received position;
+            # if the cache was empty in the first place, just add the received
+            # cursor position
+
+            if cache and received != cache.popleft():
+                # invalidate cache
+                cache.clear()
+
+            if not cache:
+                # add the last known cursor position
+                cache.append(received)
 
     def _set_cursor_state(self):
         """
         Set cursor information in own awareness state.
         """
+        # get the positions from the current selection in the UI
         anchor, head = self.selection
 
         ianchor = self.get_binary_index_from_location(anchor)
         ihead = self.get_binary_index_from_location(head)
 
-        cursor = dict(cursor=dict(anchor=ianchor, head=ihead))
+        # define the whole cursor struct
+        cursor = dict(
+            cursor=dict(
+                anchor=ianchor,
+                head=ihead,
+            ),
+        )
 
+        # update the local state
         state = self.awareness.get_local_state()
         state.update(cursor)
 
+        # set the new state and trigger an awareness update
         self.awareness.set_local_state(state)
 
     def _get_cursor_color(self, client: int) -> str:
@@ -331,11 +453,12 @@ class YTextArea(TextArea, TextEventParser):
         Get a consistent color for a client ID.
 
         Arguments:
-            client_id: the client identifier.
+            client: the client identifier.
 
         Returns:
             a hex color string.
         """
+        # try to retrieve a client's color
         states = self.awareness.client_states
         state = states.get(client, {})
         user = state.get("user", {})
@@ -365,9 +488,9 @@ class YTextArea(TextArea, TextEventParser):
         if self.awareness is None:
             return strip
 
-        cursors = self._remote_cursors
+        caches = self._remote_cursor_caches
 
-        if not cursors:
+        if not caches:
             return strip
 
         # Screen row accounting for scroll
@@ -376,10 +499,11 @@ class YTextArea(TextArea, TextEventParser):
         # Collect cursor positions on this line
         cursor_positions = []
 
-        for client, (anchor, head) in cursors.items():
+        for client, cache in caches.items():
             color = self._get_cursor_color(client)
 
-            anchor = self.get_location_from_binary_index(anchor)
+            ianchor, ihead = cache[-1]
+            anchor = self.get_location_from_binary_index(ianchor)
 
             # cap the maximum location, just to be sure
             anchor = min(anchor, self.document.end)
