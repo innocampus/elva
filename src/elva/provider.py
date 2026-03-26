@@ -129,7 +129,6 @@ class WebsocketProvider(Component):
             # subscribe to changes in YDoc and Awareness, so that those callbacks
             # can put messages into the send buffer
             self._ydoc_subscription = self.ydoc.observe(self._on_transaction_event)
-
             self._awareness_subscription = self.awareness.observe(
                 self._on_awareness_change
             )
@@ -360,16 +359,6 @@ class WebsocketProvider(Component):
 
         When called, it sends a Y sync step 1 message and a Y sync step 2 message with respect to the null state, effectively doing a pro-active cross synchronization.
         """
-        # Clear any stale awareness entries from previous sessions
-        # Only keep our own local state - fresh entries will arrive from server
-        my_id = self.awareness.client_id
-        stale_ids = [
-            cid for cid in self.awareness.client_states if cid != my_id
-        ]
-        if stale_ids:
-            self.awareness.remove_awareness_states(stale_ids, origin="local")
-            self.log.debug(f"cleared {len(stale_ids)} stale awareness entries")
-
         # init sync
         state = self.ydoc.get_state()
         step1, _ = YMessage.SYNC_STEP1.encode(state)
