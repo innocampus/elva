@@ -3,14 +3,14 @@ Widget definition.
 """
 
 from collections import deque
-from typing import Self, Literal
+from typing import Literal, Self
 
-from pycrdt import Text, UndoManager, ReadTransaction
+from pycrdt import ReadTransaction, Text, UndoManager
 from rich.segment import Segment
 from rich.style import Style
 from textual.strip import Strip
 from textual.widgets import TextArea
-from textual.widgets.text_area import Location, EditResult
+from textual.widgets.text_area import EditResult, Location
 
 from elva.awareness import Awareness
 from elva.parser import TextEventParser
