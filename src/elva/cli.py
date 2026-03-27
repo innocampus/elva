@@ -596,13 +596,6 @@ port_option = click.option(
 )
 """A CLI command decorator defining an option for the port to connect to."""
 
-safe_option = click.option(
-    "--safe/--unsafe",
-    "safe",
-    help="Enable or disable secure connection.",
-    default=True,
-)
-"""A CLI command decorator defining a flag for safe or unsafe connections."""
 
 identifier_option = click.option(
     "--identifier",
@@ -670,7 +663,6 @@ common_options = get_composed_decorator(
     password_option,
     host_option,
     port_option,
-    safe_option,
     verbosity_option,
     log_file_path_option,
 )
