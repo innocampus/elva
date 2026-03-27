@@ -164,7 +164,7 @@ class History(MessageList, ArrayEventParser, can_focus=False):
         """
         self.messages.unobserve(self._subscription)
 
-    def _on_edit(self, retain: int = 0, delete: int = 0, insert: list = []):
+    def _on_edit(self, retain: int = 0, delete: int = 0, insert: list = [], txn = None):
         """
         Hook called by the [`parse`][elva.parser.ArrayEventParser.parse] method.
 
@@ -172,6 +172,7 @@ class History(MessageList, ArrayEventParser, can_focus=False):
             retain: the index where the deletion and insertion ranges start.
             delete: the length of the deletion range.
             insert: the inserted items.
+            txn: the transaction associated with this update.
         """
         for message_view in self.children[retain : retain + delete]:
             log.debug("deleting message view in history")
@@ -226,7 +227,7 @@ class Future(MessageList, MapEventParser, can_focus=False):
         """
         self.messages.unobserve(self._subscription)
 
-    def _on_edit(self, delete: dict = {}, update: dict = {}, insert: dict = {}):
+    def _on_edit(self, delete: dict = {}, update: dict = {}, insert: dict = {}, txn = None):
         """
         Hook called by the [`parse`][elva.parser.MapEventParser.parse] method.
 
@@ -234,6 +235,7 @@ class Future(MessageList, MapEventParser, can_focus=False):
             delete: the deleted keys alongside their respective old values.
             update: the updated keys alongside their respective old and new values.
             insert: the inserted keys alongside their respective new values.
+            txn: the transaction associated with this update.
         """
         # remove old message objects
         for key in delete:
