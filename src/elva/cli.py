@@ -465,6 +465,10 @@ def pass_config_for(app: None | str = None) -> Callable:
             Returns:
                 the return value of the command.
             """
+            # retrieve app either from code or CLI
+            nonlocal app
+            app = app or ctx.params.pop("app", None)
+
             # get the merged config from context
             config = merge_configs(ctx, app=app)
 
