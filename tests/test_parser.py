@@ -115,7 +115,7 @@ def test_text_event_parser(initial_text, edits, expected_text):
     params = list()
 
     class TestParser(TextEventParser):
-        def _on_edit(self, insert="", retain=0, delete=0):
+        def _on_edit(self, insert="", retain=0, delete=0, txn=None):
             params.append((insert, retain, delete))
 
     parser = TestParser()
@@ -123,7 +123,7 @@ def test_text_event_parser(initial_text, edits, expected_text):
     # data type
     doc = Doc()
     doc["shared"] = text = Text(initial_text)
-    text.observe(lambda event: parser.parse(event))
+    text.observe(lambda event, txn: parser.parse(event, txn))
 
     #
     # TEST PARSER
@@ -229,7 +229,7 @@ def test_array_event_parser(initial_items, edits, expected_items):
     params = list()
 
     class TestParser(ArrayEventParser):
-        def _on_edit(self, insert=[], retain=0, delete=0):
+        def _on_edit(self, insert=[], retain=0, delete=0, txn=None):
             params.append((insert, retain, delete))
 
     parser = TestParser()
@@ -237,7 +237,7 @@ def test_array_event_parser(initial_items, edits, expected_items):
     # data type
     doc = Doc()
     doc["shared"] = array = Array(initial_items)
-    array.observe(lambda event: parser.parse(event))
+    array.observe(lambda event, txn: parser.parse(event, txn))
 
     #
     # TEST PARSER
@@ -319,7 +319,7 @@ def test_map_event_parser(initial_items, edits, expected_items):
     params = list()
 
     class TestParser(MapEventParser):
-        def _on_edit(self, delete={}, update={}, insert={}):
+        def _on_edit(self, delete={}, update={}, insert={}, txn=None):
             params.append((delete, update, insert))
 
     parser = TestParser()
@@ -327,7 +327,7 @@ def test_map_event_parser(initial_items, edits, expected_items):
     # data type
     doc = Doc()
     doc["shared"] = map = Map(initial_items)
-    map.observe(lambda event: parser.parse(event))
+    map.observe(lambda event, txn: parser.parse(event, txn))
 
     #
     # TEST PARSER
